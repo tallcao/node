@@ -6,11 +6,12 @@ import (
 )
 
 type MotorCurtain struct {
+	// todo
 	Percent byte `json:"percent"`
 
 	guid string
 
-	observerList []Observer
+	observer Observer
 
 	converter Converter
 	addr      uint8
@@ -25,9 +26,10 @@ func NewMotorCurtain(guid string, c Converter, o Observer) *MotorCurtain {
 		converter: c,
 
 		heart: new(Heart),
+
+		observer: o,
 	}
 
-	item.register(o)
 	if adapter, ok := c.(AddrAdapter); ok {
 		item.addr = adapter.GetAddr()
 	} else {
@@ -96,14 +98,6 @@ func (i *MotorCurtain) GetType() DEVICE_TYPE {
 }
 func (i *MotorCurtain) GetConverter() Converter {
 	return i.converter
-}
-
-func (i *MotorCurtain) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *MotorCurtain) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
 }
 
 func (i *MotorCurtain) notifyAll() {

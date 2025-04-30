@@ -16,7 +16,7 @@ type Motor struct {
 
 	guid string
 
-	observerList []Observer
+	observer Observer
 
 	converter Converter
 	addr      uint8
@@ -56,9 +56,9 @@ func NewMotor(guid string, c Converter, o Observer) *Motor {
 		converter: c,
 
 		heart: new(Heart),
-	}
 
-	item.register(o)
+		observer: o,
+	}
 
 	if adapter, ok := c.(AddrAdapter); ok {
 		item.addr = adapter.GetAddr()
@@ -178,22 +178,12 @@ func (i *Motor) GetConverter() Converter {
 	return i.converter
 }
 
-func (i *Motor) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *Motor) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
-}
-
 func (i *Motor) notifyAll() {
 
 	p := NewPayload()
 	p.Metrics = append(p.Metrics, i.percent, i.direction, i.pull, i.status)
+	i.observer.Update(i.guid, p)
 
-	for _, observer := range i.observerList {
-		observer.Update(p)
-	}
 }
 
 func (i *Motor) GetDevice485Setting() (uint32, byte, byte, byte) {

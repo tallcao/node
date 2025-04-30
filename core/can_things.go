@@ -30,6 +30,8 @@ type canThings struct {
 	convertersCache map[string]*canConverter
 
 	dataChan chan<- *model.SpMessage
+
+	view model.Observer
 }
 
 func NewCanThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId string) *canThings {
@@ -42,6 +44,8 @@ func NewCanThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId stri
 		convertersCache: make(map[string]*canConverter, 128),
 
 		dataChan: ch,
+
+		view: view.NewSparkPlugView(nodeId, ch),
 	}
 
 }
@@ -132,6 +136,15 @@ func (s *canThings) heartCheck() {
 					Payload: thing.DBirth(),
 				}
 
+				if parent, ok := thing.(model.Parent); ok {
+					for _, child := range parent.GetChildren() {
+						s.dataChan <- &model.SpMessage{
+							Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, child.GetId()),
+							Payload: child.DBirth(),
+						}
+					}
+				}
+
 				s.dataChan <- &model.SpMessage{
 					Topic:   fmt.Sprintf("spBv1.0/converters/DBIRTH/%v/%v", s.nodeId, converter.sn),
 					Payload: canConverterBirthPayload(uint32(converter.converterType)),
@@ -141,6 +154,15 @@ func (s *canThings) heartCheck() {
 				s.dataChan <- &model.SpMessage{
 					Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, thing.GetId()),
 					Payload: model.NewPayload(),
+				}
+
+				if parent, ok := thing.(model.Parent); ok {
+					for _, child := range parent.GetChildren() {
+						s.dataChan <- &model.SpMessage{
+							Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, child.GetId()),
+							Payload: model.NewPayload(),
+						}
+					}
 				}
 
 				s.dataChan <- &model.SpMessage{
@@ -240,8 +262,7 @@ func (s *canThings) addCanThing(guid string, deviceType int, converterSN string,
 
 	t := model.DEVICE_TYPE(deviceType)
 
-	v := view.NewSparkPlugView(guid, s.nodeId, s.dataChan)
-	thing, err := newThing(guid, t, converter, v)
+	thing, err := newThing(guid, t, converter, s.view)
 	if err != nil {
 		return err
 	}

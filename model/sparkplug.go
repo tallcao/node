@@ -91,4 +91,6 @@ func NewBdSeqMetric(v byte, ts uint64) *Payload_Metric {
 type SparkplugDevice interface {
 	// DData() *Payload
 	DBirth() *Payload
+
+	GetId() string
 }

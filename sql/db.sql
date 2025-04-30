@@ -27,7 +27,7 @@ CREATE TABLE panel(
 
 CREATE TABLE serial(
     id integer primary key,
-    addr integer not null,  
+    addr integer unique not null,  
     device_type integer,
     guid text
     

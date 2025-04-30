@@ -11,7 +11,7 @@ type BodySensorV4 struct {
 
 	guid string
 
-	observerList []Observer
+	observer Observer
 
 	converter Converter
 
@@ -30,10 +30,9 @@ func NewBodySensorV4(guid string, c Converter, o Observer) *BodySensorV4 {
 		guid:      guid,
 		converter: c,
 
-		heart: new(Heart),
+		heart:    new(Heart),
+		observer: o,
 	}
-
-	item.register(o)
 
 	return item
 }
@@ -81,22 +80,12 @@ func (i *BodySensorV4) GetConverter() Converter {
 	return i.converter
 }
 
-func (i *BodySensorV4) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *BodySensorV4) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
-}
-
 func (i *BodySensorV4) notifyAll() {
 
 	p := NewPayload()
 	p.Metrics = append(p.Metrics, i.body)
 
-	for _, observer := range i.observerList {
-		observer.Update(p)
-	}
+	i.observer.Update(i.guid, p)
 
 }
 

@@ -9,6 +9,10 @@ type AddrAdapter interface {
 	GetAddr() uint8
 }
 
+type Parent interface {
+	GetChildren() []SparkplugDevice
+}
+
 // type WifiDevice interface {
 // 	Get() ([]byte, error)
 

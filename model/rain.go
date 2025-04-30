@@ -12,7 +12,7 @@ type RainSensor struct {
 
 	guid string
 
-	observerList []Observer
+	observer Observer
 
 	converter Converter
 
@@ -37,9 +37,9 @@ func NewRainSensor(guid string, c Converter, o Observer) *RainSensor {
 		},
 
 		heart: new(Heart),
-	}
 
-	item.register(o)
+		observer: o,
+	}
 
 	return item
 }
@@ -107,23 +107,12 @@ func (i *RainSensor) GetConverter() Converter {
 	return i.converter
 }
 
-func (i *RainSensor) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *RainSensor) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
-}
-
 func (i *RainSensor) notifyAll() {
 
 	p := NewPayload()
 
 	p.Metrics = append(p.Metrics, i.raining)
-
-	for _, observer := range i.observerList {
-		observer.Update(p)
-	}
+	i.observer.Update(i.guid, p)
 
 }
 

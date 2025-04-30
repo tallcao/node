@@ -7,8 +7,8 @@ import (
 type DeviceAction struct {
 	GUID string `json:"guid"`
 
-	Command string      `json:"command"`
-	Param   interface{} `json:"param"`
+	Command string `json:"command"`
+	Param   any    `json:"param"`
 }
 
 type LoraPanelButton struct {
@@ -18,9 +18,9 @@ type LoraPanelButton struct {
 type LoraPanel struct {
 	// Guid string `json:"guid"`
 
-	Name    string             `json:"name"`
-	SN      string             `json:"sn"`
-	Buttons []*LoraPanelButton `json:"buttons"`
+	// Name string `json:"name"`
+	SN string `json:"sn"`
+	// Buttons []*LoraPanelButton `json:"buttons"`
 
 	time time.Time
 }
@@ -34,19 +34,25 @@ func (d *LoraPanel) Request(command string, param interface{}) {
 
 }
 
-func (m *LoraPanel) Press(key byte) []*DeviceAction {
+func (m *LoraPanel) Press(key byte) string {
 
 	if time.Since(m.time).Microseconds() < 100 {
-		return nil
+		return ""
 	}
 
 	m.time = time.Now()
-	for _, btn := range m.Buttons {
-		if btn.ButtonValue == key {
-			return btn.Actions
-		}
+
+	v := ""
+
+	switch key {
+	case 1:
+		v = "1"
+	case 2:
+		v = "2"
+	case 4:
+		v = "3"
 	}
 
-	return nil
+	return v
 
 }

@@ -11,7 +11,7 @@ type EValve struct {
 
 	guid string
 
-	observerList []Observer
+	observer Observer
 
 	converter Converter
 
@@ -30,10 +30,9 @@ func NewEValve(guid string, c Converter, o Observer) *EValve {
 		guid:      guid,
 		converter: c,
 
-		heart: new(Heart),
+		heart:    new(Heart),
+		observer: o,
 	}
-
-	item.register(o)
 
 	return item
 }
@@ -106,22 +105,12 @@ func (i *EValve) GetConverter() Converter {
 	return i.converter
 }
 
-func (i *EValve) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *EValve) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
-}
-
 func (i *EValve) notifyAll() {
 	p := NewPayload()
 
 	p.Metrics = append(p.Metrics, i.on)
 
-	for _, observer := range i.observerList {
-		observer.Update(p)
-	}
+	i.observer.Update(i.guid, p)
 
 }
 

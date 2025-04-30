@@ -15,7 +15,7 @@ type MotorFR struct {
 
 	guid string
 
-	observerList []Observer
+	observer Observer
 
 	converter Converter
 	addr      uint8
@@ -36,9 +36,10 @@ func NewMotorFR(guid string, c Converter, o Observer) *MotorFR {
 		converter: c,
 
 		heart: new(Heart),
+
+		observer: o,
 	}
 
-	item.register(o)
 	if adapter, ok := c.(AddrAdapter); ok {
 		item.addr = adapter.GetAddr()
 	} else {
@@ -126,21 +127,11 @@ func (i *MotorFR) GetConverter() Converter {
 	return i.converter
 }
 
-func (i *MotorFR) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *MotorFR) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
-}
-
 func (i *MotorFR) notifyAll() {
 	p := NewPayload()
 	p.Metrics = append(p.Metrics, i.status)
 
-	for _, observer := range i.observerList {
-		observer.Update(p)
-	}
+	i.observer.Update(i.guid, p)
 
 }
 

@@ -33,8 +33,8 @@ func newThing(guid string, t model.DEVICE_TYPE, c model.Converter, v model.Obser
 	switch t {
 	// case model.DEVICE_TYPE_MOTOR:
 	// 	thing = model.NewMotor(guid, c, v)
-	// case model.DEVICE_TYPE_DOOR:
-	// 	thing = model.NewDoor(guid, c, v)
+	case model.DEVICE_TYPE_DOOR:
+		thing = model.NewDoor(guid, c, v)
 	case model.DEVICE_TYPE_BODY:
 		thing = model.NewBodySensor(guid, c, v)
 	case model.DEVICE_TYPE_AM6108:
@@ -51,12 +51,12 @@ func newThing(guid string, t model.DEVICE_TYPE, c model.Converter, v model.Obser
 	// 	thing = &Iracc{}
 	// case DEVICE_TYPE_IRACC_GATEWAY:
 	// 	thing = &IraccGateway{}
-	// case model.DEVICE_TYPE_E_VALVE:
-	// 	thing = model.NewEValve(guid, c, v)
+	case model.DEVICE_TYPE_E_VALVE:
+		thing = model.NewEValve(guid, c, v)
 	case model.DEVICE_TYPE_LIGHT:
 		thing = model.NewLight(guid, c, v)
-	// case model.DEVICE_TYPE_SOIL_SENSOR:
-	// 	thing = model.NewSoilSensor(guid, c, v)
+	case model.DEVICE_TYPE_SOIL_SENSOR:
+		thing = model.NewSoilSensor(guid, c, v)
 	case model.DEVICE_TYPE_BODY_V4:
 		thing = model.NewBodySensorV4(guid, c, v)
 		// case DEVICE_TYPE_VOLTAGE_MODULE:
@@ -74,16 +74,16 @@ func newThing(guid string, t model.DEVICE_TYPE, c model.Converter, v model.Obser
 		// 	thing = &Breaker_STB3L_125_RJ{Addr: 0x01}
 	// case model.DEVICE_TYPE_MOTOR_FR:
 	// 	thing = model.NewMotorFR(guid, c, v)
-	// case model.DEVICE_TYPE_RAIN:
-	// 	thing = model.NewRainSensor(guid, c, v)
+	case model.DEVICE_TYPE_RAIN:
+		thing = model.NewRainSensor(guid, c, v)
 	// case model.DEVICE_TYPE_MOTOR_CURTAIN:
 	// 	thing = model.NewMotorCurtain(guid, c, v)
-	// case model.DEVICE_TYPE_LIGHTING_MODULE_4:
-	// 	thing = model.NewLightModule4(guid, c, v)
-	// case model.DEVICE_TYPE_LIGHTING_MODULE_8:
-	// 	thing = model.NewLightModule8(guid, c, v)
-	// case model.DEVICE_TYPE_LIGHTING_MODULE_16:
-	// 	thing = model.NewLightModule16(guid, c, v)
+	case model.DEVICE_TYPE_LIGHTING_MODULE_4:
+		thing = model.NewLightModule4(guid, c, v)
+	case model.DEVICE_TYPE_LIGHTING_MODULE_8:
+		thing = model.NewLightModule8(guid, c, v)
+	case model.DEVICE_TYPE_LIGHTING_MODULE_16:
+		thing = model.NewLightModule16(guid, c, v)
 	default:
 		return nil, fmt.Errorf("new thing error")
 

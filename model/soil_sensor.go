@@ -14,7 +14,7 @@ type SoilSensor struct {
 
 	guid string
 
-	observerList []Observer
+	observer Observer
 
 	converter Converter
 
@@ -55,10 +55,9 @@ func NewSoilSensor(guid string, c Converter, o Observer) *SoilSensor {
 			Interval: 60 * 10,
 		},
 
-		heart: new(Heart),
+		heart:    new(Heart),
+		observer: o,
 	}
-
-	item.register(o)
 
 	return item
 }
@@ -133,23 +132,12 @@ func (i *SoilSensor) GetConverter() Converter {
 	return i.converter
 }
 
-func (i *SoilSensor) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *SoilSensor) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
-}
-
 func (i *SoilSensor) notifyAll() {
 
 	p := NewPayload()
 
 	p.Metrics = append(p.Metrics, i.humidity, i.temperature, i.conductivity, i.ph)
-
-	for _, observer := range i.observerList {
-		observer.Update(p)
-	}
+	i.observer.Update(i.guid, p)
 
 }
 

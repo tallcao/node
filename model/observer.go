@@ -1,6 +1,6 @@
 package model
 
 type Observer interface {
-	Update(*Payload)
-	GetID() string
+	Update(string, *Payload)
+	// GetID() string
 }

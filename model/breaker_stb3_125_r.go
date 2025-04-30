@@ -15,8 +15,8 @@ type Breaker_STB3_125_R struct {
 
 	guid string
 
-	addr         byte
-	observerList []Observer
+	addr     byte
+	observer Observer
 
 	converter Converter
 
@@ -39,10 +39,9 @@ func NewBreaker_STB3_125_R(guid string, c Converter, o Observer) *Breaker_STB3_1
 
 		converter: c,
 
-		heart: new(Heart),
+		heart:    new(Heart),
+		observer: o,
 	}
-
-	item.register(o)
 
 	if adapter, ok := c.(AddrAdapter); ok {
 		item.addr = adapter.GetAddr()
@@ -152,9 +151,9 @@ func (d *Breaker_STB3_125_R) Response(data []byte) {
 	}
 
 	if len(p.Metrics) > 0 {
-		for _, observer := range d.observerList {
-			observer.Update(p)
-		}
+
+		d.observer.Update(d.guid, p)
+
 	}
 
 }
@@ -170,22 +169,12 @@ func (i *Breaker_STB3_125_R) GetConverter() Converter {
 	return i.converter
 }
 
-func (i *Breaker_STB3_125_R) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *Breaker_STB3_125_R) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
-}
-
 func (i *Breaker_STB3_125_R) notifyAll() {
 
 	p := NewPayload()
 	p.Metrics = append(p.Metrics, i.on, i.lock)
 
-	for _, observer := range i.observerList {
-		observer.Update(p)
-	}
+	i.observer.Update(i.guid, p)
 
 }
 

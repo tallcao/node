@@ -16,6 +16,14 @@ type DbConverter struct {
 	DeviceType *int64
 }
 
+type DbSerial struct {
+	Id   int64
+	Addr int64
+
+	Guid       *string
+	DeviceType *int64
+}
+
 type DbPanel struct {
 	Id int64
 	SN string
@@ -49,7 +57,7 @@ func DbAddSerialDevice(guid string, addr int, deviceType int) error {
 	}
 	defer db.Close()
 
-	_, err = db.Exec("INSERT INTO serial(guid,addr,device_type) VALUES(?,?,?)", guid, addr, deviceType)
+	_, err = db.Exec("INSERT INTO serial(guid,addr,device_type) VALUES(?,?,?) ON CONFLICT(addr) DO UPDATE SET guid=excluded.guid, device_type=excluded.device_type", guid, addr, deviceType)
 	if err != nil {
 		return err
 	}
@@ -211,6 +219,38 @@ func DbAddPanel(item *DbPanel) (*DbPanel, error) {
 	}
 
 	result.Id = id
+
+	return result, nil
+}
+
+func DbGetSerials() ([]*DbSerial, error) {
+	var result = make([]*DbSerial, 0, 128)
+	db, err := sql.Open("sqlite3", dbFile)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer db.Close()
+
+	query := "SELECT id, addr, device_type, guid FROM serial"
+
+	rows, err := db.Query(query)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var item DbSerial
+		err = rows.Scan(&item.Id, &item.Addr, &item.DeviceType, &item.Guid)
+		if err != nil {
+			return result, err
+		}
+		result = append(result, &item)
+
+	}
 
 	return result, nil
 }

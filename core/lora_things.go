@@ -5,7 +5,6 @@ import (
 	"edge/service"
 	"edge/view"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -18,14 +17,10 @@ type loraConverter struct {
 	converterType int
 }
 
-type loraPanel struct {
-	sn string
-}
-
-type panels struct {
-	Panels    []*model.LoraPanel
-	Timestamp int64
-}
+// type panels struct {
+// 	Panels    []*model.LoraPanel
+// 	Timestamp int64
+// }
 
 type loraThings struct {
 	nodeId string
@@ -37,15 +32,17 @@ type loraThings struct {
 	// key: sn
 	panels map[string]*model.LoraPanel
 
-	ActionChan chan *model.DeviceAction
+	// ActionChan chan *model.DeviceAction
 
 	converterLoraCache map[string]*loraConverter
 	// converterPanelCache []*loraPanel
-	converterPanelCache map[string]*loraPanel
+	// converterPanelCache map[string]*loraPanel
 
 	isParing bool
 
 	dataChan chan<- *model.SpMessage
+
+	view model.Observer
 }
 
 func NewLoraThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId string) *loraThings {
@@ -57,13 +54,15 @@ func NewLoraThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId str
 		// updatePanelsChan: make(chan []byte),
 		// panelFile:        "/home/root/edge/panels.json",
 
-		ActionChan: make(chan *model.DeviceAction),
+		// ActionChan: make(chan *model.DeviceAction),
 
 		converterLoraCache: make(map[string]*loraConverter, 128),
 		// converterPanelCache: make([]*loraPanel, 0, 64),
-		converterPanelCache: make(map[string]*loraPanel, 64),
+		// converterPanelCache: make(map[string]*loraPanel, 64),
 
 		dataChan: ch,
+
+		view: view.NewSparkPlugView(nodeId, ch),
 	}
 
 }
@@ -85,8 +84,7 @@ func (s *loraThings) addLoraThing(guid string, deviceType int, converterSN strin
 		Tx:       s.connection.Tx,
 	}
 
-	v := view.NewSparkPlugView(guid, s.nodeId, s.dataChan)
-	thing, err := newThing(guid, model.DEVICE_TYPE(deviceType), converter, v)
+	thing, err := newThing(guid, model.DEVICE_TYPE(deviceType), converter, s.view)
 	if err != nil {
 		return err
 	}
@@ -184,14 +182,32 @@ func (s *loraThings) heartCheck() {
 					Payload: thing.DBirth(),
 				}
 
+				if parent, ok := thing.(model.Parent); ok {
+					for _, child := range parent.GetChildren() {
+						s.dataChan <- &model.SpMessage{
+							Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, child.GetId()),
+							Payload: child.DBirth(),
+						}
+					}
+				}
+
 				s.dataChan <- &model.SpMessage{
 					Topic:   fmt.Sprintf("spBv1.0/converters/DBIRTH/%v/%v", s.nodeId, converter.sn),
 					Payload: loraConverterBirthPayload(converter.converterType),
 				}
 			} else {
 				s.dataChan <- &model.SpMessage{
-					Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, thing.GetId()),
+					Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, thing.GetId()),
 					Payload: model.NewPayload(),
+				}
+
+				if parent, ok := thing.(model.Parent); ok {
+					for _, child := range parent.GetChildren() {
+						s.dataChan <- &model.SpMessage{
+							Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, child.GetId()),
+							Payload: model.NewPayload(),
+						}
+					}
 				}
 
 				s.dataChan <- &model.SpMessage{
@@ -265,6 +281,9 @@ func (s *loraThings) addConverter(sn string, t int) {
 
 func (s *loraThings) Paring(t int) {
 
+	if s.isParing {
+		return
+	}
 	s.isParing = true
 	time.Sleep(time.Minute * time.Duration(t))
 	s.isParing = false
@@ -292,14 +311,30 @@ func (s *loraThings) Process() {
 			// press button data
 			case 0x82:
 				if len == 9 {
-
 					if panel, found := s.panels[sn]; found {
 						key := frame[7]
-						actions := panel.Press(key)
-						for _, action := range actions {
-							s.ActionChan <- action
+						v := panel.Press(key)
+
+						panelMetric := &model.Payload_Metric{
+							Name:     proto.String("press"),
+							Datatype: proto.Uint32(uint32(model.DataType_String)),
+							Value:    &model.Payload_Metric_StringValue{StringValue: v},
+
+							Timestamp: proto.Uint64(uint64(time.Now().UnixMicro())),
 						}
+
+						p := model.NewPayload()
+						p.Metrics = append(p.Metrics, panelMetric)
+
+						msg := &model.SpMessage{
+							Topic:   fmt.Sprintf("spBv1.0/lora-panels/DDATA/%v/%v", s.nodeId, sn),
+							Payload: p,
+						}
+
+						s.dataChan <- msg
+
 					}
+
 				}
 
 			// 0x85: 485, 0x83: io
@@ -320,7 +355,7 @@ func (s *loraThings) Process() {
 					panel := service.DbPanel{SN: sn}
 					if _, err := service.DbAddPanel(&panel); err == nil {
 
-						s.converterPanelCache[sn] = &loraPanel{sn: sn}
+						s.panels[sn] = &model.LoraPanel{SN: sn}
 
 						// panel birth
 
@@ -397,29 +432,29 @@ func (s *loraThings) Init() {
 	// load panel
 	if panels, err := service.DbGetPanels(); err == nil {
 		for _, p := range panels {
-			s.converterPanelCache[p.SN] = &loraPanel{sn: p.SN}
+			s.panels[p.SN] = &model.LoraPanel{SN: p.SN}
 
 		}
 	}
 
 }
 
-func (s *loraThings) updatePanels(data []byte) error {
-	p := &panels{
-		Panels: make([]*model.LoraPanel, 0, 64),
-	}
-	err := json.Unmarshal(data, &p)
-	if err != nil || p == nil {
-		return fmt.Errorf("json unmarshal error")
-	}
+// func (s *loraThings) updatePanels(data []byte) error {
+// 	p := &panels{
+// 		Panels: make([]*model.LoraPanel, 0, 64),
+// 	}
+// 	err := json.Unmarshal(data, &p)
+// 	if err != nil || p == nil {
+// 		return fmt.Errorf("json unmarshal error")
+// 	}
 
-	s.panels = make(map[string]*model.LoraPanel, len(p.Panels))
-	for _, panel := range p.Panels {
-		s.panels[panel.SN] = panel
-	}
+// 	s.panels = make(map[string]*model.LoraPanel, len(p.Panels))
+// 	for _, panel := range p.Panels {
+// 		s.panels[panel.SN] = panel
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
 // func (s *loraThings) has(guid string) bool {
 

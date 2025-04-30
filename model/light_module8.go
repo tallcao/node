@@ -2,7 +2,8 @@ package model
 
 import (
 	"edge/utils"
-	"encoding/json"
+	"fmt"
+	"strconv"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -17,10 +18,13 @@ type LightModule8 struct {
 
 	guid string
 
-	observerList []Observer
-	converter    Converter
+	observer Observer
+
+	converter Converter
 
 	heart *Heart
+
+	children []*LightModuleChild
 }
 
 func NewLightModule8(guid string, c Converter, o Observer) *LightModule8 {
@@ -28,18 +32,23 @@ func NewLightModule8(guid string, c Converter, o Observer) *LightModule8 {
 	item := &LightModule8{
 		status: &Payload_Metric{
 			Name:      proto.String("status"),
-			Datatype:  proto.Uint32(uint32(DataType_Bytes)),
-			Value:     &Payload_Metric_BytesValue{make([]byte, 8)},
+			Datatype:  proto.Uint32(uint32(DataType_UInt8)),
 			Timestamp: proto.Uint64(0),
 		},
 
 		guid:      guid,
 		converter: c,
 
-		heart: new(Heart),
+		heart:    new(Heart),
+		observer: o,
+		children: make([]*LightModuleChild, 8),
 	}
 
-	item.register(o)
+	for i := 0; i < 8; i++ {
+		id := fmt.Sprintf("%v-%v", guid, i)
+		child := NewLightModuleChild(id, i, o)
+		item.children[i] = child
+	}
 
 	if adapter, ok := c.(AddrAdapter); ok {
 		item.addr = adapter.GetAddr()
@@ -61,20 +70,14 @@ func (d *LightModule8) Request(command string, params interface{}) {
 		data = []byte{d.addr, 0x03, 0x01, 0x00, 0x00, 0x02}
 	case "on", "off", "toggle":
 
-		jsonData, err := json.Marshal(params)
+		str := params.(string)
+		i, err := strconv.ParseInt(str, 10, 64)
+
 		if err != nil {
 			return
 		}
 
-		p := &childData{}
-		err = json.Unmarshal(jsonData, &p)
-		if p == nil || err != nil {
-			return
-		}
-
-		i := p.Data
-
-		if i < 1 || i > 8 {
+		if i < 0 || i > 7 {
 			return
 		}
 
@@ -87,22 +90,23 @@ func (d *LightModule8) Request(command string, params interface{}) {
 			cmd = 0x02
 		}
 
-		status := d.status.GetBytesValue()
+		status := d.status.GetIntValue()
 		if command == "toggle" {
 
-			cmd = 0x02
-			if status[i-1] == 1 {
-				cmd = 0x00
+			cmd = 0x00
+			mask := 1 << i
+			if (status & uint32(mask)) == 0 {
+				cmd = 0x02
 			}
 		}
 
-		if i < 9 {
+		if i < 8 {
 			cmd += 2
 		} else {
 			cmd += 3
 		}
 
-		subAddr := 1 << ((16 - i) % 8)
+		subAddr := 1 << ((15 - i) % 8)
 
 		data = []byte{d.addr, 0x06, 0x01, cmd, 0x00, byte(subAddr)}
 
@@ -137,21 +141,25 @@ func (d *LightModule8) Response(data []byte) {
 
 	*d.status.Timestamp = uint64(time.Now().UnixMicro())
 
-	status := d.status.GetBytesValue()
+	old := d.status.GetIntValue()
 
 	// full open, full close
 	if cmd == 0x10 {
 		// full open
 		if d.code == 3 {
-			for i, _ := range status {
-				status[i] = 1
+			d.status.Value = &Payload_Metric_IntValue{0xFF}
+
+			for _, child := range d.children {
+				child.Set(true)
 			}
 		}
 		// full close
 		if d.code == 4 {
 
-			for i, _ := range status {
-				status[i] = 0
+			d.status.Value = &Payload_Metric_IntValue{0}
+
+			for _, child := range d.children {
+				child.Set(false)
 			}
 		}
 
@@ -168,13 +176,17 @@ func (d *LightModule8) Response(data []byte) {
 
 		switch data[3] {
 		case 0x04:
-			status[no] = 1
-		case 0x05:
-			status[no+8] = 1
+			v := (1 << no) | old
+			d.status.Value = &Payload_Metric_IntValue{v}
+
+			d.children[no].Set(true)
+
 		case 0x02:
-			status[no] = 0
-		case 0x03:
-			status[no+8] = 0
+			v := (0xFF - 1<<no) & old
+			d.status.Value = &Payload_Metric_IntValue{v}
+
+			d.children[no].Set(false)
+
 		}
 
 	}
@@ -185,20 +197,30 @@ func (d *LightModule8) Response(data []byte) {
 		// route 1-8
 		v := data[4]
 
+		statusValue := uint32(0)
+
 		for i := 0; i < 8; i++ {
 
 			flag := 1 << i
 			if (v & byte(flag)) == byte(flag) {
-				status[7-i] = 1
+				statusValue += 1 << (7 - i)
+				d.children[7-i].Set(true)
 			} else {
-				status[7-i] = 0
+
+				d.children[7-i].Set(false)
+
 			}
 
 		}
+		d.status.Value = &Payload_Metric_IntValue{statusValue}
 
 	}
 
-	d.notifyAll()
+	new := d.status.GetIntValue()
+
+	if new != old {
+		d.notifyAll()
+	}
 
 }
 
@@ -213,23 +235,13 @@ func (i *LightModule8) GetConverter() Converter {
 	return i.converter
 }
 
-func (i *LightModule8) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *LightModule8) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
-}
-
 func (i *LightModule8) notifyAll() {
 
 	p := NewPayload()
 
 	p.Metrics = append(p.Metrics, i.status)
 
-	for _, observer := range i.observerList {
-		observer.Update(p)
-	}
+	i.observer.Update(i.guid, p)
 
 }
 

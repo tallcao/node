@@ -11,7 +11,7 @@ type Door struct {
 
 	guid string
 
-	observerList []Observer
+	observer Observer
 
 	converter Converter
 
@@ -32,9 +32,9 @@ func NewDoor(guid string, c Converter, o Observer) *Door {
 		converter: c,
 
 		heart: new(Heart),
-	}
 
-	item.register(o)
+		observer: o,
+	}
 
 	return item
 }
@@ -109,23 +109,13 @@ func (i *Door) GetConverter() Converter {
 	return i.converter
 }
 
-func (i *Door) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *Door) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
-}
-
 func (i *Door) notifyAll() {
 
 	p := NewPayload()
 
 	p.Metrics = append(p.Metrics, i.on)
 
-	for _, observer := range i.observerList {
-		observer.Update(p)
-	}
+	i.observer.Update(i.guid, p)
 
 }
 

@@ -15,8 +15,8 @@ type Am6108 struct {
 
 	guid string
 
-	converter    Converter
-	observerList []Observer
+	converter Converter
+	observer  Observer
 
 	heart *Heart
 }
@@ -54,10 +54,9 @@ func NewAm6108(guid string, c Converter, o Observer) *Am6108 {
 		guid:      guid,
 		converter: c,
 
-		heart: new(Heart),
+		heart:    new(Heart),
+		observer: o,
 	}
-
-	item.register(o)
 
 	return item
 }
@@ -101,22 +100,13 @@ func (d *Am6108) GetConverter() Converter {
 	return d.converter
 }
 
-func (i *Am6108) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *Am6108) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
-}
-
 func (i *Am6108) notifyAll() {
 
 	p := NewPayload()
 	p.Metrics = append(p.Metrics, i.co2, i.hcho, i.pm25, i.temperature, i.humidity)
 
-	for _, observer := range i.observerList {
-		observer.Update(p)
-	}
+	i.observer.Update(i.guid, p)
+
 }
 
 func (i *Am6108) GetDevice485Setting() (uint32, byte, byte, byte) {

@@ -18,6 +18,8 @@ type serialThings struct {
 	connection model.Connection
 
 	dataChan chan<- *model.SpMessage
+
+	view model.Observer
 }
 
 func NewSerialThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId string) *serialThings {
@@ -28,6 +30,8 @@ func NewSerialThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId s
 		connection: conn,
 
 		dataChan: ch,
+
+		view: view.NewSparkPlugView(nodeId, ch),
 	}
 
 }
@@ -50,9 +54,7 @@ func (s *serialThings) Create(guid string, t model.DEVICE_TYPE, addr uint8) *mod
 		Tx:   s.connection.Tx,
 	}
 
-	v := view.NewSparkPlugView(guid, s.nodeId, s.dataChan)
-
-	thing, err := newThing(guid, t, c, v)
+	thing, err := newThing(guid, t, c, s.view)
 	if err != nil {
 		response.Code = 500
 		response.Error = "new device thing error"
@@ -70,8 +72,7 @@ func (s *serialThings) Create(guid string, t model.DEVICE_TYPE, addr uint8) *mod
 	err = service.DbAddSerialDevice(guid, int(addr), int(t))
 	if err != nil {
 		response.Code = 500
-		response.Error = "save serial device error"
-
+		response.Error = err.Error()
 		return response
 	}
 
@@ -97,19 +98,33 @@ func (s *serialThings) heartCheck() {
 		if thing.ConnectedChanged() {
 			if thing.IsConnected() {
 
-				msg := &model.SpMessage{
+				s.dataChan <- &model.SpMessage{
 					Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, thing.GetId()),
 					Payload: thing.DBirth(),
 				}
 
-				s.dataChan <- msg
+				if parent, ok := thing.(model.Parent); ok {
+					for _, child := range parent.GetChildren() {
+						s.dataChan <- &model.SpMessage{
+							Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, child.GetId()),
+							Payload: child.DBirth(),
+						}
+					}
+				}
+
 			} else {
-				msg := &model.SpMessage{
+				s.dataChan <- &model.SpMessage{
 					Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, thing.GetId()),
 					Payload: model.NewPayload(),
 				}
-
-				s.dataChan <- msg
+				if parent, ok := thing.(model.Parent); ok {
+					for _, child := range parent.GetChildren() {
+						s.dataChan <- &model.SpMessage{
+							Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, child.GetId()),
+							Payload: model.NewPayload(),
+						}
+					}
+				}
 			}
 		}
 
@@ -139,8 +154,8 @@ func (s *serialThings) Request(guid string, data []byte) {
 
 			for _, m := range p.GetMetrics() {
 
-				cmd := *m.Name
-				param := m.Value
+				cmd := m.GetName()
+				param := m.GetStringValue()
 
 				thing.Request(cmd, param)
 			}
@@ -151,6 +166,26 @@ func (s *serialThings) Request(guid string, data []byte) {
 
 func (s *serialThings) Init() {
 	// load serial device
+	if serials, err := service.DbGetSerials(); err == nil {
+		for _, serial := range serials {
+
+			if serial.Guid != nil && serial.DeviceType != nil {
+
+				t := model.DEVICE_TYPE(*serial.DeviceType)
+				c := &model.SerialConverter{
+					Addr: uint8(serial.Addr),
+					Tx:   s.connection.Tx,
+				}
+				thing, err := newThing(*serial.Guid, t, c, s.view)
+
+				if err != nil {
+					continue
+				}
+				s.things[uint8(serial.Addr)] = thing
+			}
+		}
+	}
+
 }
 
 func (s *serialThings) Process() {

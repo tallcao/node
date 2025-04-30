@@ -11,7 +11,7 @@ type Light struct {
 
 	guid string
 
-	observerList []Observer
+	observer Observer
 
 	converter Converter
 
@@ -30,9 +30,9 @@ func NewLight(guid string, c Converter, o Observer) *Light {
 		converter: c,
 
 		heart: new(Heart),
-	}
 
-	item.register(o)
+		observer: o,
+	}
 
 	return item
 }
@@ -124,22 +124,12 @@ func (i *Light) GetConverter() Converter {
 	return i.converter
 }
 
-func (i *Light) register(o Observer) {
-	i.observerList = append(i.observerList, o)
-}
-
-func (i *Light) deregister(o Observer) {
-	i.observerList = removeFromslice(i.observerList, o)
-}
-
 func (i *Light) notifyAll() {
 
 	p := NewPayload()
 	p.Metrics = append(p.Metrics, i.on)
 
-	for _, observer := range i.observerList {
-		observer.Update(p)
-	}
+	i.observer.Update(i.guid, p)
 }
 
 func (i *Light) HeartBeat() {

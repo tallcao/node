@@ -161,6 +161,52 @@ func (n *Node) createDevice(p *model.Payload) {
 
 }
 
+func (n *Node) loraPairing(p *model.Payload) {
+
+	commandID := ""
+
+	duration := 0
+
+	for _, m := range p.GetMetrics() {
+
+		if m.GetName() == "Command ID" {
+			commandID = m.GetStringValue()
+			continue
+		}
+
+		if m.GetName() == "Node Control/Lora Pairing" {
+
+			duration = int(m.GetIntValue())
+
+			continue
+		}
+
+	}
+
+	if commandID == "" || duration == 0 {
+		return
+	}
+
+	go n.loraThings.Paring(duration)
+
+	response := &model.CommandResponse{
+		CommandID: commandID,
+		Code:      200,
+		Timestamp: uint64(time.Now().UnixMicro()),
+	}
+
+	if payload, err := response.ToPayload(); err == nil {
+		msg := &model.SpMessage{
+			Topic:   fmt.Sprintf("spBv1.0/devices/NDATA/%v", n.id),
+			Payload: payload,
+		}
+
+		n.dataChan <- msg
+
+	}
+
+}
+
 func (n *Node) deleteDevice(p *model.Payload) {
 
 	guid := ""
@@ -286,8 +332,8 @@ func (n *Node) nodeCommandCallback(c mqtt.Client, m mqtt.Message) {
 			n.createDevice(p)
 		case "Node Control/Delete Device":
 			n.deleteDevice(p)
-		case "Node Control/Pairing":
-			n.pairing()
+		case "Node Control/Lora Pairing":
+			n.loraPairing(p)
 		}
 
 	}
@@ -315,18 +361,12 @@ func (n *Node) Run() {
 
 	go n.sparkService.Run()
 
-	for {
-		select {
-		case msg := <-n.dataChan:
+	for msg := range n.dataChan {
+		msg.Payload.Timestamp = proto.Uint64(uint64(time.Now().UnixMicro()))
+		msg.Payload.Seq = proto.Uint64(uint64(n.seq))
 
-			*msg.Payload.Timestamp = uint64(time.Now().UnixMicro())
-
-			*msg.Payload.Seq = uint64(n.seq)
-
-			if payload, err := proto.Marshal(msg.Payload); err == nil {
-				n.sparkService.Publish(msg.Topic, 0, false, payload)
-			}
-
+		if payload, err := proto.Marshal(msg.Payload); err == nil {
+			n.sparkService.Publish(msg.Topic, 0, false, payload)
 		}
 	}
 }
@@ -341,9 +381,4 @@ func (n *Node) rebirth() {
 
 // todo
 func (n *Node) reboot() {
-}
-
-// todo
-func (n *Node) pairing() {
-
 }
