@@ -18,10 +18,10 @@ type Motor struct {
 
 	observer Observer
 
-	converter Converter
-	addr      uint8
+	Converter
+	addr uint8
 
-	heart *Heart
+	IHeart *Heart
 }
 
 type percentData struct {
@@ -53,9 +53,9 @@ func NewMotor(guid string, c Converter, o Observer) *Motor {
 		},
 
 		guid:      guid,
-		converter: c,
+		Converter: c,
 
-		heart: new(Heart),
+		IHeart: new(Heart),
 
 		observer: o,
 	}
@@ -104,7 +104,7 @@ func (i *Motor) Request(command string, params interface{}) {
 	}
 	result = append(result, crc...)
 
-	i.converter.SendFrame(result)
+	i.SendFrame(result)
 }
 
 func (i *Motor) Response(data []byte) {
@@ -174,10 +174,6 @@ func (i *Motor) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_MOTOR
 }
 
-func (i *Motor) GetConverter() Converter {
-	return i.converter
-}
-
 func (i *Motor) notifyAll() {
 
 	p := NewPayload()
@@ -190,23 +186,11 @@ func (i *Motor) GetDevice485Setting() (uint32, byte, byte, byte) {
 	return 9600, 0, 8, 1
 }
 
-func (i *Motor) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
 func (i *Motor) HeartCheck() {
-	i.heart.HeartCheck()
-	if i.heart.Conected && i.heart.Changed() {
+	i.IHeart.HeartCheck()
+	if i.IHeart.IsConnected() && i.IHeart.ConnectedChanged() {
 		i.Request("getPercent", nil)
 	}
-}
-
-func (i *Motor) IsConnected() bool {
-	return i.heart.Conected
-}
-
-func (i *Motor) ConnectedChanged() bool {
-	return i.heart.Changed()
 }
 
 func (i *Motor) DBirth() *Payload {

@@ -2,49 +2,54 @@ package model
 
 import (
 	"time"
+
+	"google.golang.org/protobuf/proto"
 )
 
-type DeviceAction struct {
-	GUID string `json:"guid"`
-
-	Command string `json:"command"`
-	Param   any    `json:"param"`
-}
-
-type LoraPanelButton struct {
-	ButtonValue byte            `json:"key"`
-	Actions     []*DeviceAction `json:"actions"`
-}
 type LoraPanel struct {
-	// Guid string `json:"guid"`
+	action *Payload_Metric
 
-	// Name string `json:"name"`
-	SN string `json:"sn"`
-	// Buttons []*LoraPanelButton `json:"buttons"`
+	guid string
 
-	time time.Time
+	observer Observer
+
+	Converter
+
+	IHeart
 }
 
-// tood
-func (d *LoraPanel) Request(command string, param interface{}) {
-	switch command {
-	case "press":
+func NewLoraPanel(guid string, c Converter, o Observer) *LoraPanel {
 
+	item := &LoraPanel{
+		action: &Payload_Metric{
+			Name:      proto.String("action"),
+			Datatype:  proto.Uint32(uint32(DataType_String)),
+			Timestamp: proto.Uint64(0),
+		},
+
+		guid: guid,
+
+		Converter: c,
+		IHeart:    new(Heart),
+		observer:  o,
 	}
+
+	return item
+}
+
+func (i *LoraPanel) Request(command string, params interface{}) {
 
 }
 
-func (m *LoraPanel) Press(key byte) string {
+func (i *LoraPanel) Response(data []byte) {
 
-	if time.Since(m.time).Microseconds() < 100 {
-		return ""
+	if len(data) != 1 {
+		return
 	}
-
-	m.time = time.Now()
 
 	v := ""
 
-	switch key {
+	switch data[0] {
 	case 1:
 		v = "1"
 	case 2:
@@ -53,6 +58,39 @@ func (m *LoraPanel) Press(key byte) string {
 		v = "3"
 	}
 
-	return v
+	i.action.Value = &Payload_Metric_StringValue{v}
+	*i.action.Timestamp = uint64(time.Now().UnixMicro())
+
+	i.notifyAll()
+
+}
+
+func (i *LoraPanel) GetId() string {
+	return i.guid
+}
+
+func (i *LoraPanel) GetType() DEVICE_TYPE {
+	return DEVICE_TYPE_LORA_PANEL
+}
+
+func (i *LoraPanel) notifyAll() {
+
+	p := NewPayload()
+	p.Metrics = append(p.Metrics, i.action)
+
+	i.observer.Update(i.guid, p)
+
+}
+
+func (i *LoraPanel) DBirth() *Payload {
+	p := NewPayload()
+
+	p.Metrics = append(p.Metrics, i.action)
+
+	return p
+
+}
+
+func (i *LoraPanel) HeartRequest() {
 
 }

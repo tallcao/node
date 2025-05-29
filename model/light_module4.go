@@ -18,10 +18,10 @@ type LightModule4 struct {
 
 	guid string
 
-	observer  Observer
-	converter Converter
+	observer Observer
+	Converter
 
-	heart *Heart
+	IHeart
 
 	children []*LightModuleChild
 }
@@ -37,9 +37,9 @@ func NewLightModule4(guid string, c Converter, o Observer) *LightModule4 {
 		},
 
 		guid:      guid,
-		converter: c,
+		Converter: c,
 
-		heart: new(Heart),
+		IHeart: new(Heart),
 
 		observer: o,
 		children: make([]*LightModuleChild, 4),
@@ -127,7 +127,7 @@ func (d *LightModule4) Request(command string, params interface{}) {
 	}
 	data = append(data, crc...)
 
-	d.converter.SendFrame(data)
+	d.SendFrame(data)
 
 }
 
@@ -232,9 +232,6 @@ func (i *LightModule4) GetId() string {
 func (i *LightModule4) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_LIGHTING_MODULE_4
 }
-func (i *LightModule4) GetConverter() Converter {
-	return i.converter
-}
 
 func (i *LightModule4) notifyAll() {
 
@@ -246,23 +243,11 @@ func (i *LightModule4) notifyAll() {
 
 }
 
-func (i *LightModule4) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
 func (i *LightModule4) HeartCheck() {
-	i.heart.HeartCheck()
-	if i.heart.Conected && i.heart.Changed() {
+	i.IHeart.HeartCheck()
+	if i.IHeart.IsConnected() && i.IHeart.ConnectedChanged() {
 		i.Request("getStatus", nil)
 	}
-}
-
-func (i *LightModule4) IsConnected() bool {
-	return i.heart.Conected
-}
-
-func (i *LightModule4) ConnectedChanged() bool {
-	return i.heart.Changed()
 }
 
 func (i *LightModule4) DBirth() *Payload {

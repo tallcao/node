@@ -13,9 +13,9 @@ type BodySensor struct {
 
 	observer Observer
 
-	converter Converter
+	Converter
 
-	heart *Heart
+	IHeart
 }
 
 func NewBodySensor(guid string, c Converter, o Observer) *BodySensor {
@@ -29,9 +29,9 @@ func NewBodySensor(guid string, c Converter, o Observer) *BodySensor {
 		},
 
 		guid:      guid,
-		converter: c,
+		Converter: c,
 
-		heart: new(Heart),
+		IHeart: new(Heart),
 
 		observer: o,
 	}
@@ -78,10 +78,6 @@ func (i *BodySensor) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_BODY
 }
 
-func (i *BodySensor) GetConverter() Converter {
-	return i.converter
-}
-
 func (i *BodySensor) notifyAll() {
 
 	p := NewPayload()
@@ -94,22 +90,6 @@ func (i *BodySensor) notifyAll() {
 
 func (i *BodySensor) GetDevice485Setting() (uint32, byte, byte, byte) {
 	return 9600, 0, 8, 1
-}
-
-func (i *BodySensor) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
-func (i *BodySensor) HeartCheck() {
-	i.heart.HeartCheck()
-}
-
-func (i *BodySensor) IsConnected() bool {
-	return i.heart.Conected
-}
-
-func (i *BodySensor) ConnectedChanged() bool {
-	return i.heart.Changed()
 }
 
 func (i *BodySensor) DBirth() *Payload {

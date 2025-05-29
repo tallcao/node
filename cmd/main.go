@@ -3,16 +3,25 @@ package main
 import (
 	"edge/core"
 	"edge/service"
+	"flag"
 )
+
+var (
+	config string
+)
+
+func init() {
+	// flag.StringVar(&config, "c", "zigbee.json", "config file")
+	flag.StringVar(&config, "c", "node.json", "config file")
+}
 
 func main() {
 
-	dbService := service.NewDbusService()
+	dbusService := service.NewDbusService()
 
-	go dbService.Run()
+	go dbusService.Run()
 
-	file := "/home/root/node/node.json"
-	node := core.NewNode(file, dbService)
+	node := core.NewNode(config, dbusService)
 
 	node.Init()
 	node.Run()

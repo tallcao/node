@@ -176,3 +176,6 @@ func (c *SerialConverter) GetSN() string {
 func (c *SerialConverter) GetAddr() uint8 {
 	return c.Addr
 }
+
+func (c *SerialConverter) HeartRequest() {
+}

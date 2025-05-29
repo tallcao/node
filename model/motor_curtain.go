@@ -3,29 +3,37 @@ package model
 import (
 	"edge/utils"
 	"encoding/json"
+	"time"
+
+	"google.golang.org/protobuf/proto"
 )
 
 type MotorCurtain struct {
-	// todo
-	Percent byte `json:"percent"`
+	percent *Payload_Metric
 
 	guid string
 
 	observer Observer
 
-	converter Converter
-	addr      uint8
+	Converter
+	addr uint8
 
-	heart *Heart
+	IHeart
 }
 
 func NewMotorCurtain(guid string, c Converter, o Observer) *MotorCurtain {
 
 	item := &MotorCurtain{
-		guid:      guid,
-		converter: c,
+		percent: &Payload_Metric{
+			Name:      proto.String("percent"),
+			Datatype:  proto.Uint32(uint32(DataType_UInt8)),
+			Timestamp: proto.Uint64(0),
+		},
 
-		heart: new(Heart),
+		guid:      guid,
+		Converter: c,
+
+		IHeart: new(Heart),
 
 		observer: o,
 	}
@@ -72,7 +80,7 @@ func (i *MotorCurtain) Request(command string, params interface{}) {
 	}
 	result = append(result, crc...)
 
-	i.converter.SendFrame(result)
+	i.SendFrame(result)
 }
 
 func (i *MotorCurtain) Response(data []byte) {
@@ -82,11 +90,16 @@ func (i *MotorCurtain) Response(data []byte) {
 	}
 
 	if data[3] == 0x01 && data[4] == 0x10 {
-		i.Percent = data[5]
+
+		percent := data[5]
+		ts := uint64(time.Now().UnixMicro())
+
+		i.percent.Value = &Payload_Metric_IntValue{uint32(percent)}
+		*i.percent.Timestamp = ts
 
 	}
 
-	// i.notifyAll()
+	i.notifyAll()
 
 }
 
@@ -96,36 +109,30 @@ func (i *MotorCurtain) GetId() string {
 func (i *MotorCurtain) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_MOTOR_CURTAIN
 }
-func (i *MotorCurtain) GetConverter() Converter {
-	return i.converter
-}
 
 func (i *MotorCurtain) notifyAll() {
 
-	// for _, observer := range i.observerList {
-	// 	observer.Update()
-	// }
+	p := NewPayload()
+	p.Metrics = append(p.Metrics, i.percent)
+	i.observer.Update(i.guid, p)
 }
 
 func (i *MotorCurtain) GetDevice485Setting() (uint32, byte, byte, byte) {
 	return 9600, 0, 8, 1
 }
 
-func (i *MotorCurtain) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
 func (i *MotorCurtain) HeartCheck() {
-	i.heart.HeartCheck()
-	if i.heart.Conected && i.heart.Changed() {
+	i.IHeart.HeartCheck()
+	if i.IHeart.IsConnected() && i.IHeart.ConnectedChanged() {
 		i.Request("getPercent", nil)
 	}
 }
 
-func (i *MotorCurtain) IsConnected() bool {
-	return i.heart.Conected
-}
+func (i *MotorCurtain) DBirth() *Payload {
+	p := NewPayload()
 
-func (i *MotorCurtain) ConnectedChanged() bool {
-	return i.heart.Changed()
+	p.Metrics = append(p.Metrics, i.percent)
+
+	return p
+
 }

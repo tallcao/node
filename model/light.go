@@ -13,9 +13,9 @@ type Light struct {
 
 	observer Observer
 
-	converter Converter
+	Converter
 
-	heart *Heart
+	IHeart
 }
 
 func NewLight(guid string, c Converter, o Observer) *Light {
@@ -27,9 +27,9 @@ func NewLight(guid string, c Converter, o Observer) *Light {
 			Timestamp: proto.Uint64(0),
 		},
 		guid:      guid,
-		converter: c,
+		Converter: c,
 
-		heart: new(Heart),
+		IHeart: new(Heart),
 
 		observer: o,
 	}
@@ -41,14 +41,14 @@ func (i *Light) Request(command string, params interface{}) {
 
 	switch command {
 	case "on":
-		i.converter.SendFrame([]byte{0x01})
+		i.SendFrame([]byte{0x01})
 	case "off":
-		i.converter.SendFrame([]byte{0x00})
+		i.SendFrame([]byte{0x00})
 	case "toggle":
 		if i.on.GetBooleanValue() {
-			i.converter.SendFrame([]byte{0x00})
+			i.SendFrame([]byte{0x00})
 		} else {
-			i.converter.SendFrame([]byte{0x01})
+			i.SendFrame([]byte{0x01})
 		}
 	}
 
@@ -120,33 +120,12 @@ func (i *Light) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_LIGHT
 }
 
-func (i *Light) GetConverter() Converter {
-	return i.converter
-}
-
 func (i *Light) notifyAll() {
 
 	p := NewPayload()
 	p.Metrics = append(p.Metrics, i.on)
 
 	i.observer.Update(i.guid, p)
-}
-
-func (i *Light) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
-func (i *Light) HeartCheck() {
-	i.heart.HeartCheck()
-
-}
-
-func (i *Light) IsConnected() bool {
-	return i.heart.Conected
-}
-
-func (i *Light) ConnectedChanged() bool {
-	return i.heart.Changed()
 }
 
 func (i *Light) DBirth() *Payload {

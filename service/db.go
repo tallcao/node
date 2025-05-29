@@ -29,18 +29,9 @@ type DbPanel struct {
 	SN string
 }
 
-const dbFile = "/home/root/node/node.db"
+func DbAddConverterDevice(db *sql.DB, guid string, t int, converterSN string) error {
 
-func DbAddConverterDevice(guid string, t int, converterSN string) error {
-
-	db, err := sql.Open("sqlite3", dbFile)
-
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	_, err = db.Exec("update converter set guid=?,device_type=? where sn=? ", guid, t, converterSN)
+	_, err := db.Exec("update converter set guid=?,device_type=? where sn=? ", guid, t, converterSN)
 	if err != nil {
 		return err
 	}
@@ -48,16 +39,9 @@ func DbAddConverterDevice(guid string, t int, converterSN string) error {
 	return nil
 }
 
-func DbAddSerialDevice(guid string, addr int, deviceType int) error {
+func DbAddSerialDevice(db *sql.DB, guid string, addr int, deviceType int) error {
 
-	db, err := sql.Open("sqlite3", dbFile)
-
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	_, err = db.Exec("INSERT INTO serial(guid,addr,device_type) VALUES(?,?,?) ON CONFLICT(addr) DO UPDATE SET guid=excluded.guid, device_type=excluded.device_type", guid, addr, deviceType)
+	_, err := db.Exec("INSERT INTO serial(guid,addr,device_type) VALUES(?,?,?) ON CONFLICT(addr) DO UPDATE SET guid=excluded.guid, device_type=excluded.device_type", guid, addr, deviceType)
 	if err != nil {
 		return err
 	}
@@ -65,16 +49,9 @@ func DbAddSerialDevice(guid string, addr int, deviceType int) error {
 	return nil
 }
 
-func DbDeleteSerialDevice(guid string) error {
+func DbDeleteSerialDevice(db *sql.DB, guid string) error {
 
-	db, err := sql.Open("sqlite3", dbFile)
-
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	_, err = db.Exec("delete from serial where guid=?", guid)
+	_, err := db.Exec("delete from serial where guid=?", guid)
 	if err != nil {
 		return err
 	}
@@ -82,16 +59,9 @@ func DbDeleteSerialDevice(guid string) error {
 	return nil
 }
 
-func DbDeleteConverterDevice(guid string) error {
+func DbDeleteConverterDevice(db *sql.DB, guid string) error {
 
-	db, err := sql.Open("sqlite3", dbFile)
-
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	_, err = db.Exec("update converter set guid=null,device_type=null where guid=?", guid)
+	_, err := db.Exec("update converter set guid=null,device_type=null where guid=?", guid)
 	if err != nil {
 		return err
 	}
@@ -99,40 +69,26 @@ func DbDeleteConverterDevice(guid string) error {
 	return nil
 }
 
-func DbAddConverter(item *DbConverter) (*DbConverter, error) {
-
-	result := item
-	db, err := sql.Open("sqlite3", dbFile)
-
-	if err != nil {
-		return result, err
-	}
-	defer db.Close()
+func DbAddConverter(db *sql.DB, item *DbConverter) (*DbConverter, error) {
 
 	res, err := db.Exec("INSERT INTO converter(sn,converter_type,can_no) VALUES(?,?,?)", item.SN, item.ConverterType, item.CanNo)
 	if err != nil {
-		return result, err
+		return nil, err
 	}
 
 	id, err := res.LastInsertId()
 	if err != nil {
-		return result, err
+		return nil, err
 	}
 
+	result := item
 	result.Id = id
 
 	return result, nil
 }
 
-func DbGetConverters(filter string) ([]*DbConverter, error) {
+func DbGetConverters(db *sql.DB, filter string) ([]*DbConverter, error) {
 	var result = make([]*DbConverter, 0, 256)
-	db, err := sql.Open("sqlite3", dbFile)
-
-	if err != nil {
-		return nil, err
-	}
-
-	defer db.Close()
 
 	query := "SELECT id,sn,converter_type,can_no,guid,device_type FROM converter"
 
@@ -166,72 +122,8 @@ func DbGetConverters(filter string) ([]*DbConverter, error) {
 	return result, nil
 }
 
-func DbGetPanels() ([]*DbPanel, error) {
-	var result = make([]*DbPanel, 0, 64)
-	db, err := sql.Open("sqlite3", dbFile)
-
-	if err != nil {
-		return nil, err
-	}
-
-	defer db.Close()
-
-	query := "SELECT id,sn FROM panel order by id"
-
-	rows, err := db.Query(query)
-
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var item DbPanel
-		err = rows.Scan(&item.Id, &item.SN)
-		if err != nil {
-			return result, err
-		}
-		result = append(result, &item)
-
-	}
-
-	return result, nil
-}
-
-func DbAddPanel(item *DbPanel) (*DbPanel, error) {
-
-	result := item
-	db, err := sql.Open("sqlite3", dbFile)
-
-	if err != nil {
-		return result, err
-	}
-	defer db.Close()
-
-	res, err := db.Exec("INSERT into panel(sn) values(?)", item.SN)
-	if err != nil {
-		return result, err
-	}
-
-	id, err := res.LastInsertId()
-	if err != nil {
-		return result, err
-	}
-
-	result.Id = id
-
-	return result, nil
-}
-
-func DbGetSerials() ([]*DbSerial, error) {
+func DbGetSerials(db *sql.DB) ([]*DbSerial, error) {
 	var result = make([]*DbSerial, 0, 128)
-	db, err := sql.Open("sqlite3", dbFile)
-
-	if err != nil {
-		return nil, err
-	}
-
-	defer db.Close()
 
 	query := "SELECT id, addr, device_type, guid FROM serial"
 

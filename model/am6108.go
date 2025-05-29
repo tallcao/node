@@ -15,10 +15,10 @@ type Am6108 struct {
 
 	guid string
 
-	converter Converter
-	observer  Observer
+	Converter
+	observer Observer
 
-	heart *Heart
+	IHeart
 }
 
 func NewAm6108(guid string, c Converter, o Observer) *Am6108 {
@@ -52,9 +52,9 @@ func NewAm6108(guid string, c Converter, o Observer) *Am6108 {
 		},
 
 		guid:      guid,
-		converter: c,
+		Converter: c,
 
-		heart:    new(Heart),
+		IHeart:   new(Heart),
 		observer: o,
 	}
 
@@ -96,10 +96,6 @@ func (i *Am6108) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_AM6108
 }
 
-func (d *Am6108) GetConverter() Converter {
-	return d.converter
-}
-
 func (i *Am6108) notifyAll() {
 
 	p := NewPayload()
@@ -111,22 +107,6 @@ func (i *Am6108) notifyAll() {
 
 func (i *Am6108) GetDevice485Setting() (uint32, byte, byte, byte) {
 	return 9600, 0, 8, 1
-}
-
-func (i *Am6108) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
-func (i *Am6108) HeartCheck() {
-	i.heart.HeartCheck()
-}
-
-func (i *Am6108) IsConnected() bool {
-	return i.heart.Conected
-}
-
-func (i *Am6108) ConnectedChanged() bool {
-	return i.heart.Changed()
 }
 
 func (i *Am6108) DBirth() *Payload {

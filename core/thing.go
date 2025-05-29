@@ -5,30 +5,9 @@ import (
 	"fmt"
 )
 
-type HeartBeat interface {
-	HeartBeat()
-	HeartCheck()
-	IsConnected() bool
-	ConnectedChanged() bool
-}
+func newThing(guid string, t model.DEVICE_TYPE, c model.Converter, v model.Observer) (model.Thing, error) {
 
-type Thing interface {
-	Response([]byte)
-	Request(string, interface{})
-	GetId() string
-	GetConverter() model.Converter
-	// ReportOnConnected()
-
-	GetType() model.DEVICE_TYPE
-
-	HeartBeat
-
-	model.SparkplugDevice
-}
-
-func newThing(guid string, t model.DEVICE_TYPE, c model.Converter, v model.Observer) (Thing, error) {
-
-	var thing Thing
+	var thing model.Thing
 
 	switch t {
 	// case model.DEVICE_TYPE_MOTOR:
@@ -84,6 +63,8 @@ func newThing(guid string, t model.DEVICE_TYPE, c model.Converter, v model.Obser
 		thing = model.NewLightModule8(guid, c, v)
 	case model.DEVICE_TYPE_LIGHTING_MODULE_16:
 		thing = model.NewLightModule16(guid, c, v)
+	case model.DEVICE_TYPE_LORA_PANEL:
+		thing = model.NewLoraPanel(guid, c, v)
 	default:
 		return nil, fmt.Errorf("new thing error")
 

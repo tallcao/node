@@ -18,9 +18,9 @@ type Breaker_STB3_125_R struct {
 	addr     byte
 	observer Observer
 
-	converter Converter
+	Converter
 
-	heart *Heart
+	IHeart
 }
 
 func NewBreaker_STB3_125_R(guid string, c Converter, o Observer) *Breaker_STB3_125_R {
@@ -37,9 +37,9 @@ func NewBreaker_STB3_125_R(guid string, c Converter, o Observer) *Breaker_STB3_1
 			Timestamp: proto.Uint64(0),
 		},
 
-		converter: c,
+		Converter: c,
 
-		heart:    new(Heart),
+		IHeart:   new(Heart),
 		observer: o,
 	}
 
@@ -83,7 +83,7 @@ func (i *Breaker_STB3_125_R) Request(command string, params interface{}) {
 	}
 	data = append(data, crc...)
 
-	i.converter.SendFrame(data)
+	i.SendFrame(data)
 
 }
 
@@ -165,10 +165,6 @@ func (i *Breaker_STB3_125_R) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_BREAKER_STB3_125_R
 }
 
-func (i *Breaker_STB3_125_R) GetConverter() Converter {
-	return i.converter
-}
-
 func (i *Breaker_STB3_125_R) notifyAll() {
 
 	p := NewPayload()
@@ -178,23 +174,12 @@ func (i *Breaker_STB3_125_R) notifyAll() {
 
 }
 
-func (i *Breaker_STB3_125_R) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
 func (i *Breaker_STB3_125_R) HeartCheck() {
-	i.heart.HeartCheck()
-	if i.heart.Conected && i.heart.Changed() {
+	if i.IHeart.IsConnected() && i.IHeart.ConnectedChanged() {
 		i.Request("getStatus", nil)
+		time.Sleep(3 * time.Second)
+		i.Request("getQuantity", nil)
 	}
-}
-
-func (i *Breaker_STB3_125_R) IsConnected() bool {
-	return i.heart.Conected
-}
-
-func (i *Breaker_STB3_125_R) ConnectedChanged() bool {
-	return i.heart.Changed()
 }
 
 func (i *Breaker_STB3_125_R) DBirth() *Payload {

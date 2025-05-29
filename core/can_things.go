@@ -1,12 +1,14 @@
 package core
 
 import (
+	"database/sql"
 	"edge/model"
 	"edge/service"
 	"edge/view"
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -23,7 +25,8 @@ type canConverter struct {
 type canThings struct {
 	nodeId string
 
-	things map[uint8]Thing
+	// can no ->thing
+	things sync.Map
 
 	connection model.Connection
 
@@ -32,13 +35,14 @@ type canThings struct {
 	dataChan chan<- *model.SpMessage
 
 	view model.Observer
+
+	db *sql.DB
 }
 
-func NewCanThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId string) *canThings {
+func NewCanThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId string, db *sql.DB) *canThings {
 	return &canThings{
 
 		nodeId:     nodeId,
-		things:     make(map[uint8]Thing, 128),
 		connection: conn,
 
 		convertersCache: make(map[string]*canConverter, 128),
@@ -46,6 +50,8 @@ func NewCanThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId stri
 		dataChan: ch,
 
 		view: view.NewSparkPlugView(nodeId, ch),
+
+		db: db,
 	}
 
 }
@@ -79,7 +85,7 @@ func (s *canThings) Create(guid string, t model.DEVICE_TYPE, sn string) *model.C
 		return response
 	}
 
-	err = service.DbAddConverterDevice(guid, int(t), sn)
+	err = service.DbAddConverterDevice(s.db, guid, int(t), sn)
 	if err != nil {
 		response.Code = 500
 		response.Error = "save can device error"
@@ -93,13 +99,17 @@ func (s *canThings) Create(guid string, t model.DEVICE_TYPE, sn string) *model.C
 
 func (s *canThings) Delete(guid string) {
 
-	for no, thing := range s.things {
-		if thing.GetId() == guid {
-			delete(s.things, no)
-			service.DbDeleteConverterDevice(guid)
-			return
+	s.things.Range(func(key, value any) bool {
+
+		if thing, ok := value.(model.Thing); ok {
+			if thing.GetId() == guid {
+				s.things.Delete(key)
+				service.DbDeleteConverterDevice(s.db, guid)
+				return false
+			}
 		}
-	}
+		return true
+	})
 
 }
 
@@ -107,12 +117,6 @@ func canConverterBirthPayload(t uint32) *model.Payload {
 
 	ts := uint64(time.Now().UnixMicro())
 	typeMetric := model.NewConverterTypeMetric(t, ts)
-
-	// noMetric := &model.Payload_Metric{}
-	// *noMetric.Name = "no"
-	// *noMetric.Timestamp = ts
-	// *noMetric.Datatype = uint32(model.DataType_Int16)
-	// noMetric.Value = &model.Payload_Metric_IntValue{IntValue: uint32(no)}
 
 	p := model.NewPayload()
 	p.Metrics = append(p.Metrics, typeMetric)
@@ -123,89 +127,112 @@ func canConverterBirthPayload(t uint32) *model.Payload {
 
 func (s *canThings) heartCheck() {
 
-	for _, thing := range s.things {
-		thing.HeartCheck()
+	s.things.Range(func(key, value any) bool {
+		if thing, ok := value.(model.Thing); ok {
+			thing.HeartCheck()
 
-		if thing.ConnectedChanged() {
-			converter := s.convertersCache[thing.GetConverter().GetSN()]
+			if thing.ConnectedChanged() {
+				// converter := s.convertersCache[thing.GetConverter().GetSN()]
 
-			if thing.IsConnected() {
+				if thing.IsConnected() {
 
-				s.dataChan <- &model.SpMessage{
-					Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, thing.GetId()),
-					Payload: thing.DBirth(),
-				}
+					s.dataChan <- &model.SpMessage{
+						Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, thing.GetId()),
+						Payload: thing.DBirth(),
+					}
 
-				if parent, ok := thing.(model.Parent); ok {
-					for _, child := range parent.GetChildren() {
-						s.dataChan <- &model.SpMessage{
-							Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, child.GetId()),
-							Payload: child.DBirth(),
+					if parent, ok := thing.(model.Parent); ok {
+						for _, child := range parent.GetChildren() {
+							s.dataChan <- &model.SpMessage{
+								Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, child.GetId()),
+								Payload: child.DBirth(),
+							}
 						}
 					}
-				}
 
-				s.dataChan <- &model.SpMessage{
-					Topic:   fmt.Sprintf("spBv1.0/converters/DBIRTH/%v/%v", s.nodeId, converter.sn),
-					Payload: canConverterBirthPayload(uint32(converter.converterType)),
-				}
+					// s.dataChan <- &model.SpMessage{
+					// 	Topic:   fmt.Sprintf("spBv1.0/converters/DBIRTH/%v/%v", s.nodeId, converter.sn),
+					// 	Payload: canConverterBirthPayload(uint32(converter.converterType)),
+					// }
 
-			} else {
-				s.dataChan <- &model.SpMessage{
-					Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, thing.GetId()),
-					Payload: model.NewPayload(),
-				}
+				} else {
+					s.dataChan <- &model.SpMessage{
+						Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, thing.GetId()),
+						Payload: model.NewPayload(),
+					}
 
-				if parent, ok := thing.(model.Parent); ok {
-					for _, child := range parent.GetChildren() {
-						s.dataChan <- &model.SpMessage{
-							Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, child.GetId()),
-							Payload: model.NewPayload(),
+					if parent, ok := thing.(model.Parent); ok {
+						for _, child := range parent.GetChildren() {
+							s.dataChan <- &model.SpMessage{
+								Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, child.GetId()),
+								Payload: model.NewPayload(),
+							}
 						}
 					}
-				}
 
-				s.dataChan <- &model.SpMessage{
-					Topic:   fmt.Sprintf("spBv1.0/converters/DDEATH/%v/%v", s.nodeId, converter.sn),
-					Payload: model.NewPayload(),
-				}
+					// s.dataChan <- &model.SpMessage{
+					// 	Topic:   fmt.Sprintf("spBv1.0/converters/DDEATH/%v/%v", s.nodeId, converter.sn),
+					// 	Payload: model.NewPayload(),
+					// }
 
+				}
 			}
-		}
 
-	}
+		}
+		return true
+	})
 }
 
 func (s *canThings) heartBeatRequest() {
 
-	for _, thing := range s.things {
-		if c, ok := thing.GetConverter().(*model.CanConverter); ok {
-			c.HeartRequest()
+	s.things.Range(func(key, value any) bool {
+		if thing, ok := value.(model.Thing); ok {
+			thing.HeartRequest()
+			time.Sleep(2 * time.Second)
 		}
-		time.Sleep(2 * time.Second)
+		return true
 
-	}
+	})
 
+}
+func (s *canThings) getThingByGuid(guid string) (model.Thing, bool) {
+
+	var result model.Thing
+	found := false
+
+	s.things.Range(func(key, value any) bool {
+		if thing, ok := value.(model.Thing); ok {
+			if thing.GetId() == guid {
+				result = thing
+				found = true
+				return false
+			}
+
+		}
+
+		return true
+	})
+
+	return result, found
 }
 
 func (s *canThings) Request(guid string, data []byte) {
 
-	for _, thing := range s.things {
-		if thing.GetId() == guid {
-			p := &model.Payload{}
-			err := proto.Unmarshal(data, p)
+	if thing, found := s.getThingByGuid(guid); found {
 
-			if err != nil {
-				return
-			}
+		p := &model.Payload{}
+		err := proto.Unmarshal(data, p)
 
-			for _, m := range p.GetMetrics() {
+		if err != nil {
+			return
+		}
 
-				cmd := *m.Name
-				param := m.GetStringValue()
+		for _, m := range p.GetMetrics() {
 
-				thing.Request(cmd, param)
-			}
+			cmd := *m.Name
+			param := m.GetStringValue()
+
+			thing.Request(cmd, param)
 		}
 	}
 }
@@ -267,7 +294,7 @@ func (s *canThings) addCanThing(guid string, deviceType int, converterSN string,
 		return err
 	}
 
-	s.things[convertNo] = thing
+	s.things.Store(convertNo, thing)
 
 	switch thing := thing.(type) {
 	case model.Device485:
@@ -286,7 +313,7 @@ func (s *canThings) addCanThing(guid string, deviceType int, converterSN string,
 func (s *canThings) Init() {
 
 	// load converters, devices
-	if converters, err := service.DbGetConverters("can"); err == nil {
+	if converters, err := service.DbGetConverters(s.db, "can"); err == nil {
 		for _, c := range converters {
 			s.addConverter(int(c.CanNo), c.SN, int(c.ConverterType))
 
@@ -325,7 +352,7 @@ func (s *canThings) converterRegister(data []byte) {
 				ConverterType: int64(data[0]),
 				CanNo:         int64(no),
 			}
-			if _, err := service.DbAddConverter(converter); err == nil {
+			if _, err := service.DbAddConverter(s.db, converter); err == nil {
 
 				s.addConverter(int(no), sn, int(data[0]))
 
@@ -363,7 +390,8 @@ func (s *canThings) Process() {
 			// 3: 485
 			if code == 1 || code == 2 || code == 3 {
 
-				if thing, found := s.things[no]; found {
+				if value, ok := s.things.Load(no); ok {
+					thing := value.(model.Thing)
 					thing.Response(data)
 				}
 
@@ -371,7 +399,8 @@ func (s *canThings) Process() {
 
 			// heart beat
 			if code == 4 {
-				if thing, found := s.things[no]; found {
+				if value, ok := s.things.Load(no); ok {
+					thing := value.(model.Thing)
 					thing.HeartBeat()
 				}
 			}

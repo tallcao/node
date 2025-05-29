@@ -14,10 +14,10 @@ type RainSensor struct {
 
 	observer Observer
 
-	converter Converter
+	Converter
 
 	PassiveReporting *PassiveReporting
-	heart            *Heart
+	IHeart
 }
 
 func NewRainSensor(guid string, c Converter, o Observer) *RainSensor {
@@ -30,13 +30,13 @@ func NewRainSensor(guid string, c Converter, o Observer) *RainSensor {
 		},
 
 		guid:      guid,
-		converter: c,
+		Converter: c,
 
 		PassiveReporting: &PassiveReporting{
 			Interval: 60 * 5,
 		},
 
-		heart: new(Heart),
+		IHeart: new(Heart),
 
 		observer: o,
 	}
@@ -66,7 +66,7 @@ func (i *RainSensor) Request(command string, params interface{}) {
 	}
 
 	data = append(data, crc...)
-	i.converter.SendFrame(data)
+	i.SendFrame(data)
 
 }
 
@@ -103,10 +103,6 @@ func (i *RainSensor) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_RAIN
 }
 
-func (i *RainSensor) GetConverter() Converter {
-	return i.converter
-}
-
 func (i *RainSensor) notifyAll() {
 
 	p := NewPayload()
@@ -128,23 +124,11 @@ func (i *RainSensor) StopLoopRequest() {
 	i.PassiveReporting.StopLoopRequest()
 }
 
-func (i *RainSensor) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
 func (i *RainSensor) HeartCheck() {
-	i.heart.HeartCheck()
-	if i.heart.Conected && i.heart.Changed() {
+	i.IHeart.HeartCheck()
+	if i.IHeart.IsConnected() && i.IHeart.ConnectedChanged() {
 		i.Request("getStatus", nil)
 	}
-}
-
-func (i *RainSensor) IsConnected() bool {
-	return i.heart.Conected
-}
-
-func (i *RainSensor) ConnectedChanged() bool {
-	return i.heart.Changed()
 }
 
 func (i *RainSensor) DBirth() *Payload {

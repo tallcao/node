@@ -13,9 +13,9 @@ type EValve struct {
 
 	observer Observer
 
-	converter Converter
+	Converter
 
-	heart *Heart
+	IHeart
 }
 
 func NewEValve(guid string, c Converter, o Observer) *EValve {
@@ -28,9 +28,9 @@ func NewEValve(guid string, c Converter, o Observer) *EValve {
 		},
 
 		guid:      guid,
-		converter: c,
+		Converter: c,
 
-		heart:    new(Heart),
+		IHeart:   new(Heart),
 		observer: o,
 	}
 
@@ -41,17 +41,17 @@ func (i *EValve) Request(command string, params interface{}) {
 
 	switch command {
 	case "on":
-		i.converter.SendFrame([]byte{0x01})
+		i.SendFrame([]byte{0x01})
 	case "off":
-		i.converter.SendFrame([]byte{0x00})
+		i.SendFrame([]byte{0x00})
 	case "toggle":
 		if i.on.GetBooleanValue() {
-			i.converter.SendFrame([]byte{0x01})
+			i.SendFrame([]byte{0x01})
 		} else {
-			i.converter.SendFrame([]byte{0x00})
+			i.SendFrame([]byte{0x00})
 		}
 	case "getStatus":
-		i.converter.SendFrame([]byte{0x02})
+		i.SendFrame([]byte{0x02})
 	}
 }
 
@@ -101,9 +101,6 @@ func (i *EValve) GetId() string {
 func (i *EValve) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_E_VALVE
 }
-func (i *EValve) GetConverter() Converter {
-	return i.converter
-}
 
 func (i *EValve) notifyAll() {
 	p := NewPayload()
@@ -114,23 +111,11 @@ func (i *EValve) notifyAll() {
 
 }
 
-func (i *EValve) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
 func (i *EValve) HeartCheck() {
-	i.heart.HeartCheck()
-	if i.heart.Conected && i.heart.Changed() {
+	i.IHeart.HeartCheck()
+	if i.IHeart.IsConnected() && i.IHeart.ConnectedChanged() {
 		i.Request("getStatus", nil)
 	}
-}
-
-func (i *EValve) IsConnected() bool {
-	return i.heart.Conected
-}
-
-func (i *EValve) ConnectedChanged() bool {
-	return i.heart.Changed()
 }
 
 func (i *EValve) DBirth() *Payload {

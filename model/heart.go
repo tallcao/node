@@ -1,10 +1,10 @@
 package model
 
 type Heart struct {
-	Conected bool `json:"connected"`
+	connected bool
 
-	last          uint16
-	current       uint16
+	last          uint8
+	current       uint8
 	statusChanged bool
 }
 
@@ -17,10 +17,10 @@ func (h *Heart) HeartCheck() {
 		connected = false
 	}
 
-	h.statusChanged = (h.Conected != connected)
+	h.statusChanged = (h.connected != connected)
 
 	h.last = h.current
-	h.Conected = connected
+	h.connected = connected
 
 }
 
@@ -29,6 +29,10 @@ func (h *Heart) HeartBeat() {
 	h.current = h.current + 1
 }
 
-func (h *Heart) Changed() bool {
+func (h *Heart) ConnectedChanged() bool {
 	return h.statusChanged
+}
+
+func (h *Heart) IsConnected() bool {
+	return h.connected
 }

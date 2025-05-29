@@ -1,6 +1,7 @@
 package core
 
 import (
+	"database/sql"
 	"edge/model"
 	"edge/service"
 	"edge/system"
@@ -15,9 +16,10 @@ import (
 )
 
 type nodeConfig struct {
-	GUID   string `json:"id"`
+	ID     string `json:"id"`
 	Cafile string `json:"cafile"`
 	Broker string `json:"broker"`
+	Dbfile string `json:"dbfile"`
 }
 
 type Node struct {
@@ -35,6 +37,8 @@ type Node struct {
 	dataChan chan *model.SpMessage
 
 	seq byte
+
+	db *sql.DB
 }
 
 func NewNode(file string, dbus *service.DbusService) *Node {
@@ -46,16 +50,22 @@ func NewNode(file string, dbus *service.DbusService) *Node {
 	}
 
 	config := &nodeConfig{}
-	err = json.Unmarshal(content, &config)
-	if err != nil || config == nil {
+	err = json.Unmarshal(content, config)
+	if err != nil {
 		return nil
 	}
 
-	id := config.GUID
+	id := config.ID
 	ca := config.Cafile
 	uri := config.Broker
 
 	ch := make(chan *model.SpMessage)
+
+	db, err := sql.Open("sqlite3", config.Dbfile)
+
+	if err != nil {
+		return nil
+	}
 
 	return &Node{
 
@@ -63,23 +73,26 @@ func NewNode(file string, dbus *service.DbusService) *Node {
 
 		seq: getSeq(),
 
-		canThings:    NewCanThings(dbus.CanConnection(), ch, id),
-		loraThings:   NewLoraThings(dbus.LoraConnection(), ch, id),
-		serialThings: NewSerialThings(dbus.SerialConnection(), ch, id),
+		canThings:    NewCanThings(dbus.CanConnection(), ch, id, db),
+		loraThings:   NewLoraThings(dbus.LoraConnection(), ch, id, db),
+		serialThings: NewSerialThings(dbus.SerialConnection(), ch, id, db),
 
 		sparkService: service.NewSparkplugService(id, ca, uri),
 
 		dataChan: ch,
+
+		db: db,
 	}
 
 }
 
 func (n *Node) Init() {
-	n.sparkService.SetOnConn(n.onConnectHandler)
 
 	n.loraThings.Init()
 	n.canThings.Init()
 	n.serialThings.Init()
+	n.sparkService.SetOnConn(n.onConnectHandler)
+
 }
 
 func (n *Node) stateCallback(c mqtt.Client, m mqtt.Message) {
@@ -297,10 +310,14 @@ func (n Node) onConnectHandler(c mqtt.Client) {
 	// DCMD
 	c.Subscribe(fmt.Sprintf("spBv1.0/devices/DCMD/%v/+", n.id), 0, n.deviceCommandCallback)
 
+	// lora
+	c.Subscribe(fmt.Sprintf("spBv1.0/lora/DBIRTH/%v/+", n.id), 0, n.loraBirthCallback)
+
 	// NBIRTH
 	msg := &model.SpMessage{
-		Topic:   fmt.Sprintf("spBv1.0/devices/NBIRTH/%v", n.id),
-		Payload: n.nbirth(),
+		Topic:    fmt.Sprintf("spBv1.0/devices/NBIRTH/%v", n.id),
+		Payload:  n.nbirth(),
+		Retained: true,
 	}
 
 	n.dataChan <- msg
@@ -353,6 +370,40 @@ func (n *Node) deviceCommandCallback(c mqtt.Client, m mqtt.Message) {
 
 }
 
+func (n *Node) loraBirthCallback(c mqtt.Client, m mqtt.Message) {
+	if !n.primaryHostAppOnline {
+		return
+	}
+
+	sn := utils.GetTopicN(m.Topic(), 4)
+	guid := ""
+	deviceType := 0
+	converterType := 0
+
+	p := &model.Payload{}
+	err := proto.Unmarshal(m.Payload(), p)
+
+	if err != nil {
+		return
+	}
+
+	for _, metric := range p.GetMetrics() {
+
+		switch metric.GetName() {
+		case "guid":
+			guid = metric.GetStringValue()
+		case "device type":
+			deviceType = int(metric.GetIntValue())
+		case "converter type":
+			converterType = int(metric.GetIntValue())
+		}
+
+	}
+
+	n.loraThings.addLoraThing(guid, deviceType, sn, converterType)
+
+}
+
 func (n *Node) Run() {
 
 	go n.canThings.Process()
@@ -361,12 +412,13 @@ func (n *Node) Run() {
 
 	go n.sparkService.Run()
 
+	defer n.db.Close()
 	for msg := range n.dataChan {
 		msg.Payload.Timestamp = proto.Uint64(uint64(time.Now().UnixMicro()))
 		msg.Payload.Seq = proto.Uint64(uint64(n.seq))
 
 		if payload, err := proto.Marshal(msg.Payload); err == nil {
-			n.sparkService.Publish(msg.Topic, 0, false, payload)
+			n.sparkService.Publish(msg.Topic, msg.Qos, msg.Retained, payload)
 		}
 	}
 }

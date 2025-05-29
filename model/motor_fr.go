@@ -17,10 +17,10 @@ type MotorFR struct {
 
 	observer Observer
 
-	converter Converter
-	addr      uint8
+	Converter
+	addr uint8
 
-	heart *Heart
+	IHeart
 }
 
 func NewMotorFR(guid string, c Converter, o Observer) *MotorFR {
@@ -33,9 +33,9 @@ func NewMotorFR(guid string, c Converter, o Observer) *MotorFR {
 		},
 
 		guid:      guid,
-		converter: c,
+		Converter: c,
 
-		heart: new(Heart),
+		IHeart: new(Heart),
 
 		observer: o,
 	}
@@ -75,7 +75,7 @@ func (i *MotorFR) Request(command string, params interface{}) {
 		return
 	}
 	result = append(result, crc...)
-	i.converter.SendFrame(result)
+	i.SendFrame(result)
 
 }
 
@@ -123,10 +123,6 @@ func (i *MotorFR) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_MOTOR_FR
 }
 
-func (i *MotorFR) GetConverter() Converter {
-	return i.converter
-}
-
 func (i *MotorFR) notifyAll() {
 	p := NewPayload()
 	p.Metrics = append(p.Metrics, i.status)
@@ -137,22 +133,6 @@ func (i *MotorFR) notifyAll() {
 
 func (i *MotorFR) GetDevice485Setting() (uint32, byte, byte, byte) {
 	return 9600, 0, 8, 1
-}
-
-func (i *MotorFR) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
-func (i *MotorFR) HeartCheck() {
-	i.heart.HeartCheck()
-}
-
-func (i *MotorFR) IsConnected() bool {
-	return i.heart.Conected
-}
-
-func (i *MotorFR) ConnectedChanged() bool {
-	return i.heart.Changed()
 }
 
 func (i *MotorFR) DBirth() *Payload {

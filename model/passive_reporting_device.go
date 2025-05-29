@@ -16,7 +16,7 @@ type PassiveReporting struct {
 }
 
 type intervalData struct {
-	Data uint `json:"data"`
+	Data uint `json:"seconds"`
 }
 
 type RequestCommand func(string, interface{})

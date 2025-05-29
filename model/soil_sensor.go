@@ -16,11 +16,11 @@ type SoilSensor struct {
 
 	observer Observer
 
-	converter Converter
+	Converter
 
 	PassiveReporting *PassiveReporting
 
-	heart *Heart
+	IHeart
 }
 
 func NewSoilSensor(guid string, c Converter, o Observer) *SoilSensor {
@@ -49,13 +49,13 @@ func NewSoilSensor(guid string, c Converter, o Observer) *SoilSensor {
 		},
 
 		guid:      guid,
-		converter: c,
+		Converter: c,
 
 		PassiveReporting: &PassiveReporting{
 			Interval: 60 * 10,
 		},
 
-		heart:    new(Heart),
+		IHeart:   new(Heart),
 		observer: o,
 	}
 
@@ -67,7 +67,7 @@ func (i *SoilSensor) Request(command string, params interface{}) {
 	switch command {
 	case "getStatus":
 		data := []byte{0x01, 0x03, 0x00, 0x00, 0x00, 0x04, 0x44, 0x09}
-		i.converter.SendFrame(data)
+		i.SendFrame(data)
 	case "setInterval":
 		i.PassiveReporting.SetInterval(params)
 		// i.notifyAll()
@@ -128,10 +128,6 @@ func (i *SoilSensor) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_SOIL_SENSOR
 }
 
-func (i *SoilSensor) GetConverter() Converter {
-	return i.converter
-}
-
 func (i *SoilSensor) notifyAll() {
 
 	p := NewPayload()
@@ -153,23 +149,11 @@ func (i *SoilSensor) StopLoopRequest() {
 	i.PassiveReporting.StopLoopRequest()
 }
 
-func (i *SoilSensor) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
 func (i *SoilSensor) HeartCheck() {
-	i.heart.HeartCheck()
-	if i.heart.Conected && i.heart.Changed() {
+	i.IHeart.HeartCheck()
+	if i.IHeart.IsConnected() && i.IHeart.ConnectedChanged() {
 		i.Request("getStatus", nil)
 	}
-}
-
-func (i *SoilSensor) IsConnected() bool {
-	return i.heart.Conected
-}
-
-func (i *SoilSensor) ConnectedChanged() bool {
-	return i.heart.Changed()
 }
 
 func (i *SoilSensor) DBirth() *Payload {

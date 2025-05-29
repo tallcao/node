@@ -1,12 +1,14 @@
 package core
 
 import (
+	"database/sql"
 	"edge/model"
 	"edge/service"
 	"edge/view"
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -25,12 +27,13 @@ type loraConverter struct {
 type loraThings struct {
 	nodeId string
 
-	things map[string]Thing
+	// converter sn ->thing
+	things sync.Map
 
 	connection model.Connection
 
 	// key: sn
-	panels map[string]*model.LoraPanel
+	// panels map[string]*model.LoraPanel
 
 	// ActionChan chan *model.DeviceAction
 
@@ -43,18 +46,18 @@ type loraThings struct {
 	dataChan chan<- *model.SpMessage
 
 	view model.Observer
+
+	db *sql.DB
 }
 
-func NewLoraThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId string) *loraThings {
+func NewLoraThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId string, db *sql.DB) *loraThings {
 	return &loraThings{
 		nodeId:     nodeId,
-		things:     make(map[string]Thing, 128),
 		connection: conn,
-		panels:     make(map[string]*model.LoraPanel),
 		// updatePanelsChan: make(chan []byte),
-		// panelFile:        "/home/root/edge/panels.json",
 
 		// ActionChan: make(chan *model.DeviceAction),
+		// things: make(map[string]model.Thing, 128),
 
 		converterLoraCache: make(map[string]*loraConverter, 128),
 		// converterPanelCache: make([]*loraPanel, 0, 64),
@@ -63,6 +66,8 @@ func NewLoraThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId str
 		dataChan: ch,
 
 		view: view.NewSparkPlugView(nodeId, ch),
+
+		db: db,
 	}
 
 }
@@ -88,7 +93,7 @@ func (s *loraThings) addLoraThing(guid string, deviceType int, converterSN strin
 	if err != nil {
 		return err
 	}
-	s.things[converterSN] = thing
+	s.things.Store(converterSN, thing)
 
 	switch thing := thing.(type) {
 	case model.Device485:
@@ -131,7 +136,7 @@ func (s *loraThings) Create(guid string, t model.DEVICE_TYPE, sn string) *model.
 		return response
 	}
 
-	err = service.DbAddConverterDevice(guid, int(t), sn)
+	err = service.DbAddConverterDevice(s.db, guid, int(t), sn)
 	if err != nil {
 		response.Code = 500
 		response.Error = "save can device error"
@@ -145,13 +150,17 @@ func (s *loraThings) Create(guid string, t model.DEVICE_TYPE, sn string) *model.
 
 func (s *loraThings) Delete(guid string) {
 
-	for sn, thing := range s.things {
-		if thing.GetId() == guid {
-			delete(s.things, sn)
-			service.DbDeleteConverterDevice(guid)
-			return
+	s.things.Range(func(key, value any) bool {
+
+		if thing, ok := value.(model.Thing); ok {
+			if thing.GetId() == guid {
+				s.things.Delete(key)
+				service.DbDeleteConverterDevice(s.db, guid)
+				return false
+			}
 		}
-	}
+		return true
+	})
 
 }
 
@@ -169,94 +178,98 @@ func loraConverterBirthPayload(t int) *model.Payload {
 
 func (s *loraThings) heartCheck() {
 
-	for _, thing := range s.things {
-		thing.HeartCheck()
+	s.things.Range(func(key, value any) bool {
+		if thing, ok := value.(model.Thing); ok {
+			thing.HeartCheck()
 
-		if thing.ConnectedChanged() {
-			converter := s.converterLoraCache[thing.GetConverter().GetSN()]
+			if thing.ConnectedChanged() {
+				// converter := s.converterLoraCache[thing.GetConverter().GetSN()]
 
-			if thing.IsConnected() {
+				if thing.IsConnected() {
 
-				s.dataChan <- &model.SpMessage{
-					Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, thing.GetId()),
-					Payload: thing.DBirth(),
-				}
+					s.dataChan <- &model.SpMessage{
+						Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, thing.GetId()),
+						Payload: thing.DBirth(),
+					}
 
-				if parent, ok := thing.(model.Parent); ok {
-					for _, child := range parent.GetChildren() {
-						s.dataChan <- &model.SpMessage{
-							Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, child.GetId()),
-							Payload: child.DBirth(),
+					if parent, ok := thing.(model.Parent); ok {
+						for _, child := range parent.GetChildren() {
+							s.dataChan <- &model.SpMessage{
+								Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, child.GetId()),
+								Payload: child.DBirth(),
+							}
 						}
 					}
-				}
 
-				s.dataChan <- &model.SpMessage{
-					Topic:   fmt.Sprintf("spBv1.0/converters/DBIRTH/%v/%v", s.nodeId, converter.sn),
-					Payload: loraConverterBirthPayload(converter.converterType),
-				}
-			} else {
-				s.dataChan <- &model.SpMessage{
-					Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, thing.GetId()),
-					Payload: model.NewPayload(),
-				}
+					// s.dataChan <- &model.SpMessage{
+					// 	Topic:   fmt.Sprintf("spBv1.0/converters/DBIRTH/%v/%v", s.nodeId, converter.sn),
+					// 	Payload: loraConverterBirthPayload(converter.converterType),
+					// }
+				} else {
+					s.dataChan <- &model.SpMessage{
+						Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, thing.GetId()),
+						Payload: model.NewPayload(),
+					}
 
-				if parent, ok := thing.(model.Parent); ok {
-					for _, child := range parent.GetChildren() {
-						s.dataChan <- &model.SpMessage{
-							Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, child.GetId()),
-							Payload: model.NewPayload(),
+					if parent, ok := thing.(model.Parent); ok {
+						for _, child := range parent.GetChildren() {
+							s.dataChan <- &model.SpMessage{
+								Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, child.GetId()),
+								Payload: model.NewPayload(),
+							}
 						}
 					}
-				}
 
-				s.dataChan <- &model.SpMessage{
-					Topic:   fmt.Sprintf("spBv1.0/converters/DDEATH/%v/%v", s.nodeId, converter.sn),
-					Payload: model.NewPayload(),
+					// s.dataChan <- &model.SpMessage{
+					// 	Topic:   fmt.Sprintf("spBv1.0/converters/DDEATH/%v/%v", s.nodeId, converter.sn),
+					// 	Payload: model.NewPayload(),
+					// }
 				}
 			}
-		}
 
-	}
+		}
+		return true
+
+	})
+
 }
 
 func (s *loraThings) heartBeatRequest() {
 
-	for _, thing := range s.things {
-		if c, ok := thing.GetConverter().(*model.LoraConverter); ok {
-			c.HeartRequest()
+	s.things.Range(func(key, value interface{}) bool {
+		if thing, ok := value.(model.Thing); ok {
+			thing.HeartRequest()
+			time.Sleep(3 * time.Second)
 		}
-		time.Sleep(3 * time.Second)
+		return true
 
-	}
+	})
 
 }
 
 func (s *loraThings) Request(guid string, data []byte) {
 
-	for _, thing := range s.things {
-		if thing.GetId() == guid {
-			p := model.NewPayload()
-			err := proto.Unmarshal(data, p)
+	if thing, found := s.getThingByGuid(guid); found {
 
-			if err != nil {
-				return
-			}
+		p := &model.Payload{}
+		err := proto.Unmarshal(data, p)
 
-			for _, m := range p.GetMetrics() {
+		if err != nil {
+			return
+		}
 
-				cmd := *m.Name
-				param := m.Value
+		for _, m := range p.GetMetrics() {
 
-				thing.Request(cmd, param)
-			}
+			cmd := *m.Name
+			param := m.Value
+
+			thing.Request(cmd, param)
 		}
 	}
-
 }
 
 func getLoraCmd(t int) byte {
-	cmd := 0x00
+	cmd := byte(0x00)
 
 	// 4: io, 5: 485
 	switch t {
@@ -264,10 +277,9 @@ func getLoraCmd(t int) byte {
 		cmd = 0x04
 	case 5:
 		cmd = 0x05
-
 	}
 
-	return byte(cmd)
+	return cmd
 }
 
 func (s *loraThings) addConverter(sn string, t int) {
@@ -308,39 +320,11 @@ func (s *loraThings) Process() {
 
 			switch cmd {
 
-			// press button data
-			case 0x82:
-				if len == 9 {
-					if panel, found := s.panels[sn]; found {
-						key := frame[7]
-						v := panel.Press(key)
-
-						panelMetric := &model.Payload_Metric{
-							Name:     proto.String("press"),
-							Datatype: proto.Uint32(uint32(model.DataType_String)),
-							Value:    &model.Payload_Metric_StringValue{StringValue: v},
-
-							Timestamp: proto.Uint64(uint64(time.Now().UnixMicro())),
-						}
-
-						p := model.NewPayload()
-						p.Metrics = append(p.Metrics, panelMetric)
-
-						msg := &model.SpMessage{
-							Topic:   fmt.Sprintf("spBv1.0/lora-panels/DDATA/%v/%v", s.nodeId, sn),
-							Payload: p,
-						}
-
-						s.dataChan <- msg
-
-					}
-
-				}
-
-			// 0x85: 485, 0x83: io
-			case 0x85, 0x83:
+			// 0x85: 485, 0x83: io, 0x82: button
+			case 0x85, 0x83, 0x82:
 				if len > 7 {
-					if thing, found := s.things[sn]; found {
+					if value, ok := s.things.Load(sn); ok {
+						thing := value.(model.Thing)
 						thing.HeartBeat()
 						if len > 8 {
 							thing.Response(frame[7 : len-1])
@@ -352,35 +336,15 @@ func (s *loraThings) Process() {
 				if len == 8 && s.isParing {
 					model.LoraRegist(id, s.connection.Tx)
 
-					panel := service.DbPanel{SN: sn}
-					if _, err := service.DbAddPanel(&panel); err == nil {
-
-						s.panels[sn] = &model.LoraPanel{SN: sn}
-
-						// panel birth
-
-						panelMetric := &model.Payload_Metric{
-							Name:     proto.String("panel type"),
-							Datatype: proto.Uint32(uint32(model.DataType_Int16)),
-							Value:    &model.Payload_Metric_IntValue{IntValue: 3},
-
-							Timestamp: proto.Uint64(uint64(time.Now().UnixMicro())),
-						}
-
-						p := model.NewPayload()
-						p.Metrics = append(p.Metrics, panelMetric)
-
-						msg := &model.SpMessage{
-							Topic:   fmt.Sprintf("spBv1.0/lora-panels/DBIRTH/%v/%v", s.nodeId, sn),
-							Payload: p,
-						}
-
-						s.dataChan <- msg
+					s.dataChan <- &model.SpMessage{
+						Topic: fmt.Sprintf("spBv1.0/lora-panels/DBIRTH/%v/%v", s.nodeId, sn),
+						// Payload: loraPanelBirthPayload(guid),
+						Payload: model.NewPayload(),
 					}
 
 				}
 
-				//0xF2 io register, 0xF3 485 register
+			//0xF2 io register, 0xF3 485 register
 			case 0xF2, 0xF3:
 				if len == 8 && s.isParing {
 					model.LoraRegist(id, s.connection.Tx)
@@ -391,7 +355,7 @@ func (s *loraThings) Process() {
 						SN:            sn,
 						ConverterType: int64(t),
 					}
-					if _, err := service.DbAddConverter(converter); err == nil {
+					if _, err := service.DbAddConverter(s.db, converter); err == nil {
 
 						s.addConverter(sn, int(t))
 
@@ -418,7 +382,7 @@ func (s *loraThings) Process() {
 func (s *loraThings) Init() {
 
 	// load converter, devices
-	if converters, err := service.DbGetConverters("lora"); err == nil {
+	if converters, err := service.DbGetConverters(s.db, "lora"); err == nil {
 		for _, c := range converters {
 			s.addConverter(c.SN, int(c.ConverterType))
 
@@ -429,40 +393,25 @@ func (s *loraThings) Init() {
 
 	}
 
-	// load panel
-	if panels, err := service.DbGetPanels(); err == nil {
-		for _, p := range panels {
-			s.panels[p.SN] = &model.LoraPanel{SN: p.SN}
-
-		}
-	}
-
 }
 
-// func (s *loraThings) updatePanels(data []byte) error {
-// 	p := &panels{
-// 		Panels: make([]*model.LoraPanel, 0, 64),
-// 	}
-// 	err := json.Unmarshal(data, &p)
-// 	if err != nil || p == nil {
-// 		return fmt.Errorf("json unmarshal error")
-// 	}
+func (s *loraThings) getThingByGuid(guid string) (model.Thing, bool) {
 
-// 	s.panels = make(map[string]*model.LoraPanel, len(p.Panels))
-// 	for _, panel := range p.Panels {
-// 		s.panels[panel.SN] = panel
-// 	}
+	var result model.Thing
+	found := false
 
-// 	return nil
-// }
+	s.things.Range(func(key, value any) bool {
+		if thing, ok := value.(model.Thing); ok {
+			if thing.GetId() == guid {
+				result = thing
+				found = true
+				return false
+			}
 
-// func (s *loraThings) has(guid string) bool {
+		}
 
-// 	for _, thing := range s.things {
-// 		if thing.GetId() == guid {
-// 			return true
-// 		}
-// 	}
+		return true
+	})
 
-// 	return false
-// }
+	return result, found
+}

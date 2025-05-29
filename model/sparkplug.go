@@ -49,8 +49,10 @@ func (cmd CommandResponse) ToPayload() (*Payload, error) {
 }
 
 type SpMessage struct {
-	Topic   string
-	Payload *Payload
+	Topic    string
+	Payload  *Payload
+	Qos      byte
+	Retained bool
 }
 
 type SpSTATE struct {
@@ -63,6 +65,17 @@ func NewPayload() *Payload {
 		Timestamp: proto.Uint64(0),
 		Seq:       proto.Uint64(0),
 	}
+}
+
+func NewLoraPanelMetric(guid string, ts uint64) *Payload_Metric {
+	metric := &Payload_Metric{
+		Name:      proto.String("device id"),
+		Datatype:  proto.Uint32(uint32(DataType_String)),
+		Value:     &Payload_Metric_StringValue{StringValue: guid},
+		Timestamp: proto.Uint64(ts),
+	}
+
+	return metric
 }
 
 func NewConverterTypeMetric(v uint32, ts uint64) *Payload_Metric {

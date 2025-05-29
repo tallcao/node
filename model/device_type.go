@@ -40,11 +40,3 @@ const (
 	DEVICE_TYPE_MOTOR_CURTAIN
 	DEVICE_TYPE_WIFI_SWITCH02
 )
-
-type Device485 interface {
-	GetDevice485Setting() (uint32, byte, byte, byte)
-}
-
-type DeviceRelay interface {
-	GetRelayDefaultState() byte
-}

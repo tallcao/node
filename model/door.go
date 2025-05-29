@@ -13,9 +13,9 @@ type Door struct {
 
 	observer Observer
 
-	converter Converter
+	Converter
 
-	heart *Heart
+	IHeart
 }
 
 func NewDoor(guid string, c Converter, o Observer) *Door {
@@ -29,9 +29,9 @@ func NewDoor(guid string, c Converter, o Observer) *Door {
 		},
 
 		guid:      guid,
-		converter: c,
+		Converter: c,
 
-		heart: new(Heart),
+		IHeart: new(Heart),
 
 		observer: o,
 	}
@@ -43,14 +43,14 @@ func (i *Door) Request(command string, params interface{}) {
 
 	switch command {
 	case "on":
-		i.converter.SendFrame([]byte{0x01})
+		i.SendFrame([]byte{0x01})
 	case "off":
-		i.converter.SendFrame([]byte{0x00})
+		i.SendFrame([]byte{0x00})
 	case "toggle":
 		if i.on.GetBooleanValue() {
-			i.converter.SendFrame([]byte{0x01})
+			i.SendFrame([]byte{0x01})
 		} else {
-			i.converter.SendFrame([]byte{0x00})
+			i.SendFrame([]byte{0x00})
 		}
 
 	}
@@ -105,10 +105,6 @@ func (i *Door) GetType() DEVICE_TYPE {
 	return DEVICE_TYPE_DOOR
 }
 
-func (i *Door) GetConverter() Converter {
-	return i.converter
-}
-
 func (i *Door) notifyAll() {
 
 	p := NewPayload()
@@ -117,23 +113,6 @@ func (i *Door) notifyAll() {
 
 	i.observer.Update(i.guid, p)
 
-}
-
-func (i *Door) HeartBeat() {
-	i.heart.HeartBeat()
-}
-
-func (i *Door) HeartCheck() {
-	i.heart.HeartCheck()
-
-}
-
-func (i *Door) IsConnected() bool {
-	return i.heart.Conected
-}
-
-func (i *Door) ConnectedChanged() bool {
-	return i.heart.Changed()
 }
 
 func (i *Door) DBirth() *Payload {
