@@ -2,8 +2,11 @@ package model
 
 import (
 	"edge/utils"
+	"encoding/json"
+	"log"
 	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -54,8 +57,7 @@ func NewBreaker_STB3_125_R(guid string, c Converter, o Observer) *Breaker_STB3_1
 
 func (i *Breaker_STB3_125_R) Request(command string, params interface{}) {
 
-	var data []byte
-	data = append(data, i.addr)
+	data := []byte{i.addr}
 
 	switch command {
 	case "heartBeat":
@@ -189,4 +191,37 @@ func (i *Breaker_STB3_125_R) DBirth() *Payload {
 
 	return p
 
+}
+func (i *Breaker_STB3_125_R) UpdateDelta(c mqtt.Client, m mqtt.Message) {
+
+	var update struct {
+		On bool `json:"on"`
+	}
+
+	err := json.Unmarshal(m.Payload(), &update)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal breaker stb3-125-r update delta: %v", err)
+		return
+	}
+
+	currentOn := i.on.GetBooleanValue()
+	if update.On != currentOn {
+
+		data := []byte{i.addr}
+		switch update.On {
+		case true:
+			data = append(data, 0x05, 0x00, 0x01, 0xFF, 0x00)
+		case false:
+			data = append(data, 0x05, 0x00, 0x01, 0x00, 0x00)
+		}
+
+		crc, err := utils.CRC16(data)
+		if err != nil {
+			return
+		}
+		data = append(data, crc...)
+
+		i.SendFrame(data)
+	}
 }

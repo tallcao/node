@@ -1,8 +1,11 @@
 package model
 
 import (
+	"encoding/json"
+	"log"
 	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -125,4 +128,28 @@ func (i *EValve) DBirth() *Payload {
 
 	return p
 
+}
+
+func (i *EValve) UpdateDelta(c mqtt.Client, m mqtt.Message) {
+
+	var update struct {
+		On bool `json:"on"`
+	}
+
+	err := json.Unmarshal(m.Payload(), &update)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal e-valve update delta: %v", err)
+		return
+	}
+
+	currentOn := i.on.GetBooleanValue()
+	if update.On != currentOn {
+		switch update.On {
+		case true:
+			i.SendFrame([]byte{0x01})
+		case false:
+			i.SendFrame([]byte{0x00})
+		}
+	}
 }

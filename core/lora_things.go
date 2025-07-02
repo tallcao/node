@@ -311,8 +311,13 @@ func (s *loraThings) Process() {
 		select {
 
 		case frame := <-s.connection.Rx:
+			frameLen := len(frame)
 
 			len := frame[1]
+
+			if len != byte(frameLen) {
+				continue
+			}
 			cmd := frame[2]
 
 			id := frame[3:7]

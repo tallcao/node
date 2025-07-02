@@ -2,6 +2,7 @@ package core
 
 import (
 	"edge/model"
+	"edge/service"
 	"fmt"
 )
 
@@ -65,8 +66,18 @@ func newThing(guid string, t model.DEVICE_TYPE, c model.Converter, v model.Obser
 		thing = model.NewLightModule16(guid, c, v)
 	case model.DEVICE_TYPE_LORA_PANEL:
 		thing = model.NewLoraPanel(guid, c, v)
+	case model.DEVICE_TYPE_R1016:
+		thing = model.NewR1016(guid, c, v)
 	default:
 		return nil, fmt.Errorf("new thing error")
+
+	}
+
+	if shadow, ok := thing.(model.Shadow); ok {
+
+		topic := fmt.Sprintf("%v/shadow/update/delta", guid)
+		service.GetMqttService().AddTopicHandler(topic, shadow.UpdateDelta)
+		service.GetMqttService().AddSubscriptionTopic(topic, 1)
 
 	}
 

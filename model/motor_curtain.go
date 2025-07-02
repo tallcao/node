@@ -3,8 +3,10 @@ package model
 import (
 	"edge/utils"
 	"encoding/json"
+	"log"
 	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -135,4 +137,35 @@ func (i *MotorCurtain) DBirth() *Payload {
 
 	return p
 
+}
+
+func (i *MotorCurtain) UpdateDelta(c mqtt.Client, m mqtt.Message) {
+
+	var update struct {
+		Percent uint32 `json:"percent"`
+	}
+
+	err := json.Unmarshal(m.Payload(), &update)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal motor curtain update delta: %v", err)
+		return
+	}
+
+	currentPercent := i.percent.GetIntValue()
+	if update.Percent > 100 {
+		log.Printf("ERROR: Invalid percent value %d for motor curtain %s", update.Percent, i.guid)
+		return
+	}
+	if update.Percent != currentPercent {
+
+		data := []byte{i.addr, 0xFE, 0xFE, 0x03, 0x04, byte(update.Percent)}
+		crc, err := utils.CRC16(data)
+		if err != nil {
+			log.Printf("ERROR: Failed to calculate CRC16 for motor curtain %s: %v", i.guid, err)
+			return
+		}
+		data = append(data, crc...)
+		i.SendFrame(data)
+	}
 }

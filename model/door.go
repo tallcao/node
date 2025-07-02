@@ -1,8 +1,11 @@
 package model
 
 import (
+	"encoding/json"
+	"log"
 	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -56,7 +59,29 @@ func (i *Door) Request(command string, params interface{}) {
 	}
 
 }
+func (i *Door) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
+	var update struct {
+		On bool `json:"on"`
+	}
+
+	err := json.Unmarshal(m.Payload(), &update)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal door update delta: %v", err)
+		return
+	}
+
+	currentOn := i.on.GetBooleanValue()
+	if update.On != currentOn {
+		switch update.On {
+		case true:
+			i.SendFrame([]byte{0x01})
+		case false:
+			i.SendFrame([]byte{0x00})
+		}
+	}
+}
 func (i *Door) Response(data []byte) {
 	if len(data) != 8 && len(data) != 2 {
 		return

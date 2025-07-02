@@ -2,14 +2,17 @@ package model
 
 import (
 	"edge/utils"
+	"encoding/json"
+	"log"
 	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"google.golang.org/protobuf/proto"
 )
 
 type MotorFR struct {
 
-	// 0:stop, 1: close, 2: open
+	// 0:stop, 1: open, 2: close
 
 	status *Payload_Metric
 
@@ -94,9 +97,9 @@ func (i *MotorFR) Response(data []byte) {
 		if data[1] == 0x06 {
 			switch data[5] {
 			case 0x01:
-				status = 2
-			case 0x02:
 				status = 1
+			case 0x02:
+				status = 2
 			case 0x00:
 				status = 0
 
@@ -142,4 +145,33 @@ func (i *MotorFR) DBirth() *Payload {
 
 	return p
 
+}
+
+func (i *MotorFR) UpdateDelta(c mqtt.Client, m mqtt.Message) {
+
+	var update struct {
+		Status uint32 `json:"status"`
+	}
+
+	err := json.Unmarshal(m.Payload(), &update)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal e-valve update delta: %v", err)
+		return
+	}
+
+	currentState := i.status.GetIntValue()
+
+	if update.Status != currentState {
+
+		data := []byte{i.addr, 0x06, 0x00, 0x00, 0x00, byte(update.Status)}
+
+		crc, err := utils.CRC16(data)
+		if err != nil {
+			log.Printf("ERROR: Failed to calculate CRC16 for motor curtain %s: %v", i.guid, err)
+			return
+		}
+		data = append(data, crc...)
+		i.SendFrame(data)
+	}
 }

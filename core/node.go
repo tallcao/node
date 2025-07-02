@@ -32,7 +32,7 @@ type Node struct {
 	canThings    *canThings
 	serialThings *serialThings
 
-	sparkService *service.SparkplugService
+	// sparkService *service.SparkplugService
 
 	dataChan chan *model.SpMessage
 
@@ -67,6 +67,7 @@ func NewNode(file string, dbus *service.DbusService) *Node {
 		return nil
 	}
 
+	service.InitMqttService(id, uri, ca)
 	return &Node{
 
 		id: id,
@@ -77,7 +78,7 @@ func NewNode(file string, dbus *service.DbusService) *Node {
 		loraThings:   NewLoraThings(dbus.LoraConnection(), ch, id, db),
 		serialThings: NewSerialThings(dbus.SerialConnection(), ch, id, db),
 
-		sparkService: service.NewSparkplugService(id, ca, uri),
+		// sparkService: service.NewSparkplugService(id, ca, uri),
 
 		dataChan: ch,
 
@@ -91,7 +92,7 @@ func (n *Node) Init() {
 	n.loraThings.Init()
 	n.canThings.Init()
 	n.serialThings.Init()
-	n.sparkService.SetOnConn(n.onConnectHandler)
+	// n.sparkService.SetOnConn(n.onConnectHandler)
 
 }
 
@@ -284,7 +285,8 @@ func (n *Node) nbirth() *model.Payload {
 
 	ts := uint64(time.Now().UnixMicro())
 
-	bdSeq := n.sparkService.GetBdSeq()
+	// bdSeq := n.sparkService.GetBdSeq()
+	bdSeq := byte(0)
 	bdSeqMetric := model.NewBdSeqMetric(bdSeq, ts)
 	rebirthMetric := newRebirthMetric(ts)
 
@@ -410,7 +412,11 @@ func (n *Node) Run() {
 	go n.loraThings.Process()
 	go n.serialThings.Process()
 
-	go n.sparkService.Run()
+	go service.GetMqttService().Start()
+
+	defer service.GetMqttService().Stop()
+	service.GetMqttService().AddConnectHandler(n.onConnectHandler)
+	// go n.sparkService.Run()
 
 	defer n.db.Close()
 	for msg := range n.dataChan {
@@ -418,7 +424,8 @@ func (n *Node) Run() {
 		msg.Payload.Seq = proto.Uint64(uint64(n.seq))
 
 		if payload, err := proto.Marshal(msg.Payload); err == nil {
-			n.sparkService.Publish(msg.Topic, msg.Qos, msg.Retained, payload)
+			service.GetMqttService().PublishMessage(msg.Topic, msg.Qos, msg.Retained, payload)
+			// n.sparkService.Publish(msg.Topic, msg.Qos, msg.Retained, payload)
 		}
 	}
 }
