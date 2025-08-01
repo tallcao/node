@@ -23,6 +23,5 @@ func main() {
 
 	node := core.NewNode(config, dbusService)
 
-	node.Init()
 	node.Run()
 }

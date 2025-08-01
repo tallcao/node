@@ -1,227 +1,157 @@
 package core
 
 import (
-	"database/sql"
 	"edge/model"
 	"edge/service"
 	"edge/view"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
-
-	"google.golang.org/protobuf/proto"
 )
 
 type serialThings struct {
 	nodeId string
 
-	// addr -> thing
-	things sync.Map
+	mu     sync.Mutex
+	things map[byte]model.Thing
 
 	connection model.Connection
 
-	dataChan chan<- *model.SpMessage
+	pubChan chan<- *model.MqttMsg
 
 	view model.Observer
-
-	db *sql.DB
 }
 
-func NewSerialThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId string, db *sql.DB) *serialThings {
+func (s *serialThings) UpdateDevice(device model.Device) {
+
+	switch device.Operation {
+	case "add":
+		s.add(device)
+
+	case "delete":
+		s.delete(device)
+	}
+}
+
+func NewSerialThings(conn model.Connection, ch chan<- *model.MqttMsg, nodeId string) *serialThings {
 	return &serialThings{
 		nodeId: nodeId,
 
+		things:     make(map[uint8]model.Thing),
 		connection: conn,
 
-		dataChan: ch,
+		pubChan: ch,
 
-		view: view.NewSparkPlugView(nodeId, ch),
-
-		db: db,
+		view: view.NewShadowView(nodeId, ch),
 	}
 
 }
-
-func (s *serialThings) Create(guid string, t model.DEVICE_TYPE, addr uint8) *model.CommandResponse {
-
-	response := &model.CommandResponse{
-		Code: 200,
-	}
-
-	if addr == 0 {
-		response.Code = 500
-		response.Error = "addr error"
-
-		return response
-	}
-
+func (s *serialThings) add(device model.Device) error {
 	c := &model.SerialConverter{
-		Addr: addr,
+		Addr: uint8(device.Addr),
 		Tx:   s.connection.Tx,
 	}
 
-	thing, err := newThing(guid, t, c, s.view)
+	thing, err := newThing(device.UUID, device.Vendor, device.Model, c, s.view)
 	if err != nil {
-		response.Code = 500
-		response.Error = "new device thing error"
+		return err
+	}
 
-		return response
+	if parent, ok := thing.(model.Parent); ok {
+		for _, child := range device.Children {
+
+			deviceChild := model.NewLightModuleChild(child.UUID, child.No, s.view, thing)
+
+			topic := fmt.Sprintf("%v/shadow/update/delta", child.UUID)
+			service.GetMqttService().AddTopicHandler(topic, deviceChild.UpdateDelta)
+			service.GetMqttService().AddSubscriptionTopic(topic, 1)
+
+			topic = fmt.Sprintf("commands/%v", child.UUID)
+			service.GetMqttService().AddTopicHandler(topic, deviceChild.CommandRequest)
+			service.GetMqttService().AddSubscriptionTopic(topic, 0)
+
+			parent.AddChild(deviceChild)
+
+		}
 
 	}
 
-	s.things.Store(addr, thing)
+	s.mu.Lock()
+	s.things[uint8(device.Addr)] = thing
+	s.mu.Unlock()
 
 	if thing, ok := thing.(model.PassiveReportingDevice); ok {
 		thing.StartLoopRequest()
 	}
 
-	err = service.DbAddSerialDevice(s.db, guid, int(addr), int(t))
-	if err != nil {
-		response.Code = 500
-		response.Error = err.Error()
-		return response
+	return nil
+}
+func (s *serialThings) delete(device model.Device) {
+	s.mu.Lock()
+
+	if thing, ok := s.things[device.Addr]; ok {
+
+		if parent, ok := thing.(model.Parent); ok {
+
+			for _, id := range parent.GetChildrenIds() {
+				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", id))
+				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", id))
+
+			}
+			parent.RemoveChildren()
+
+		}
+
+		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", device.UUID))
+		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", device.UUID))
+
+		delete(s.things, device.Addr)
+
 	}
 
-	return response
-}
-
-func (s *serialThings) Delete(guid string) {
-
-	s.things.Range(func(key, value any) bool {
-
-		if thing, ok := value.(model.Thing); ok {
-			if thing.GetId() == guid {
-				s.things.Delete(key)
-				service.DbDeleteSerialDevice(s.db, guid)
-				return false
-			}
-		}
-		return true
-	})
+	s.mu.Unlock()
 }
 
 func (s *serialThings) heartCheck() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	s.things.Range(func(key, value any) bool {
-		if thing, ok := value.(model.Thing); ok {
-			thing.HeartCheck()
+	for _, thing := range s.things {
+		thing.HeartCheck()
 
-			if thing.ConnectedChanged() {
-				if thing.IsConnected() {
+		if thing.ConnectedChanged() {
 
-					s.dataChan <- &model.SpMessage{
-						Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, thing.GetId()),
-						Payload: thing.DBirth(),
-					}
+			payload := map[string]bool{
+				"connected": thing.IsConnected(),
+			}
 
-					if parent, ok := thing.(model.Parent); ok {
-						for _, child := range parent.GetChildren() {
-							s.dataChan <- &model.SpMessage{
-								Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, child.GetId()),
-								Payload: child.DBirth(),
-							}
-						}
-					}
-
-				} else {
-					s.dataChan <- &model.SpMessage{
-						Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, thing.GetId()),
-						Payload: model.NewPayload(),
-					}
-					if parent, ok := thing.(model.Parent); ok {
-						for _, child := range parent.GetChildren() {
-							s.dataChan <- &model.SpMessage{
-								Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, child.GetId()),
-								Payload: model.NewPayload(),
-							}
-						}
+			s.pubChan <- &model.MqttMsg{
+				Topic:   fmt.Sprintf("%v/shadow/update/reported", thing.GetId()),
+				Payload: payload,
+			}
+			// children connected
+			if parent, ok := thing.(model.Parent); ok {
+				for _, id := range parent.GetChildrenIds() {
+					s.pubChan <- &model.MqttMsg{
+						Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
+						Payload: payload,
 					}
 				}
 			}
 		}
-		return true
-
-	})
+	}
 }
 
 func (s *serialThings) heartBeatRequest() {
 
-	s.things.Range(func(key, value any) bool {
-		if thing, ok := value.(model.Thing); ok {
-			thing.Request("heartBeat", nil)
-			time.Sleep(2 * time.Second)
-		}
-		return true
+	s.mu.Lock()
+	things := maps.Clone(s.things)
+	s.mu.Unlock()
 
-	})
-
-}
-
-func (s *serialThings) getThingByGuid(guid string) (model.Thing, bool) {
-
-	var result model.Thing
-	found := false
-
-	s.things.Range(func(key, value any) bool {
-		if thing, ok := value.(model.Thing); ok {
-			if thing.GetId() == guid {
-				result = thing
-				found = true
-				return false
-			}
-
-		}
-
-		return true
-	})
-
-	return result, found
-}
-
-func (s *serialThings) Request(guid string, data []byte) {
-
-	if thing, found := s.getThingByGuid(guid); found {
-
-		p := &model.Payload{}
-		err := proto.Unmarshal(data, p)
-
-		if err != nil {
-			return
-		}
-
-		for _, m := range p.GetMetrics() {
-
-			cmd := m.GetName()
-			param := m.GetStringValue()
-
-			thing.Request(cmd, param)
-		}
-	}
-
-}
-
-func (s *serialThings) Init() {
-	// load serial device
-	if serials, err := service.DbGetSerials(s.db); err == nil {
-		for _, serial := range serials {
-
-			if serial.Guid != nil && serial.DeviceType != nil {
-
-				addr := uint8(serial.Addr)
-				t := model.DEVICE_TYPE(*serial.DeviceType)
-				c := &model.SerialConverter{
-					Addr: addr,
-					Tx:   s.connection.Tx,
-				}
-				thing, err := newThing(*serial.Guid, t, c, s.view)
-
-				if err != nil {
-					continue
-				}
-
-				s.things.Store(addr, thing)
-			}
-		}
+	for _, thing := range things {
+		thing.HeartRequest()
+		time.Sleep(2 * time.Second) // 避免过快请求
 	}
 
 }
@@ -236,12 +166,13 @@ func (s *serialThings) Process() {
 
 		case frame := <-s.connection.Rx:
 			addr := frame[0]
-			if value, ok := s.things.Load(addr); ok {
-				thing := value.(model.Thing)
+			s.mu.Lock()
+			if thing, ok := s.things[addr]; ok {
 				thing.Response(frame)
 				thing.HeartBeat()
 
 			}
+			s.mu.Unlock()
 
 		case <-heartSendTick.C:
 			go s.heartBeatRequest()

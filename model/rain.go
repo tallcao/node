@@ -2,13 +2,10 @@ package model
 
 import (
 	"edge/utils"
-	"time"
-
-	"google.golang.org/protobuf/proto"
 )
 
 type RainSensor struct {
-	raining *Payload_Metric
+	raining bool
 
 	guid string
 
@@ -23,11 +20,6 @@ type RainSensor struct {
 func NewRainSensor(guid string, c Converter, o Observer) *RainSensor {
 
 	item := &RainSensor{
-		raining: &Payload_Metric{
-			Name:      proto.String("raining"),
-			Datatype:  proto.Uint32(uint32(DataType_Boolean)),
-			Timestamp: proto.Uint64(0),
-		},
 
 		guid:      guid,
 		Converter: c,
@@ -75,19 +67,16 @@ func (i *RainSensor) Response(data []byte) {
 		return
 	}
 
-	raining := i.raining.GetBooleanValue()
+	raining := i.raining
 	if data[4] == 0x00 {
-		raining = false
+		i.raining = false
 	}
 
 	if data[4] == 0x01 {
-		raining = true
+		i.raining = true
 	}
 
-	changed := (raining != i.raining.GetBooleanValue())
-
-	i.raining.Value = &Payload_Metric_BooleanValue{raining}
-	*i.raining.Timestamp = uint64(time.Now().UnixMicro())
+	changed := (raining != i.raining)
 
 	if changed {
 
@@ -105,10 +94,10 @@ func (i *RainSensor) GetType() DEVICE_TYPE {
 
 func (i *RainSensor) notifyAll() {
 
-	p := NewPayload()
-
-	p.Metrics = append(p.Metrics, i.raining)
-	i.observer.Update(i.guid, p)
+	state := map[string]interface{}{
+		"raining": i.raining,
+	}
+	i.observer.Update(i.guid, state)
 
 }
 
@@ -129,13 +118,4 @@ func (i *RainSensor) HeartCheck() {
 	if i.IHeart.IsConnected() && i.IHeart.ConnectedChanged() {
 		i.Request("getStatus", nil)
 	}
-}
-
-func (i *RainSensor) DBirth() *Payload {
-	p := NewPayload()
-
-	p.Metrics = append(p.Metrics, i.raining)
-
-	return p
-
 }

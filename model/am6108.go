@@ -1,17 +1,11 @@
 package model
 
-import (
-	"time"
-
-	"google.golang.org/protobuf/proto"
-)
-
 type Am6108 struct {
-	co2         *Payload_Metric
-	hcho        *Payload_Metric
-	pm25        *Payload_Metric
-	temperature *Payload_Metric
-	humidity    *Payload_Metric
+	co2         uint16
+	hcho        uint16
+	pm25        uint16
+	temperature float32
+	humidity    uint16
 
 	guid string
 
@@ -24,32 +18,6 @@ type Am6108 struct {
 func NewAm6108(guid string, c Converter, o Observer) *Am6108 {
 
 	item := &Am6108{
-
-		co2: &Payload_Metric{
-			Name:      proto.String("co2"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt16)),
-			Timestamp: proto.Uint64(0),
-		},
-		hcho: &Payload_Metric{
-			Name:      proto.String("hcho"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt16)),
-			Timestamp: proto.Uint64(0),
-		},
-		pm25: &Payload_Metric{
-			Name:      proto.String("pm25"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt16)),
-			Timestamp: proto.Uint64(0),
-		},
-		temperature: &Payload_Metric{
-			Name:      proto.String("temperature"),
-			Datatype:  proto.Uint32(uint32(DataType_Float)),
-			Timestamp: proto.Uint64(0),
-		},
-		humidity: &Payload_Metric{
-			Name:      proto.String("humidity"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt16)),
-			Timestamp: proto.Uint64(0),
-		},
 
 		guid:      guid,
 		Converter: c,
@@ -66,22 +34,15 @@ func (d *Am6108) Response(data []byte) {
 		return
 	}
 
-	ts := uint64(time.Now().UnixMicro())
+	d.co2 = 256*uint16(data[9]) + uint16(data[10])
 
-	d.co2.Value = &Payload_Metric_IntValue{256*uint32(data[9]) + uint32(data[10])}
-	*d.co2.Timestamp = ts
+	d.hcho = 256*uint16(data[14]) + uint16(data[15])
 
-	d.hcho.Value = &Payload_Metric_IntValue{256*uint32(data[14]) + uint32(data[15])}
-	*d.hcho.Timestamp = ts
+	d.pm25 = 256*uint16(data[7]) + uint16(data[8])
 
-	d.pm25.Value = &Payload_Metric_IntValue{256*uint32(data[7]) + uint32(data[8])}
-	*d.hcho.Timestamp = ts
+	d.temperature = (256*float32(data[11]) + float32(data[12]) - 100) / 10.0
 
-	d.temperature.Value = &Payload_Metric_FloatValue{(256*float32(data[11]) + float32(data[12]) - 100) / 10.0}
-	*d.temperature.Timestamp = ts
-
-	d.humidity.Value = &Payload_Metric_IntValue{uint32(data[13])}
-	*d.humidity.Timestamp = ts
+	d.humidity = uint16(data[13])
 
 	d.notifyAll()
 }
@@ -98,22 +59,17 @@ func (i *Am6108) GetType() DEVICE_TYPE {
 
 func (i *Am6108) notifyAll() {
 
-	p := NewPayload()
-	p.Metrics = append(p.Metrics, i.co2, i.hcho, i.pm25, i.temperature, i.humidity)
-
-	i.observer.Update(i.guid, p)
+	state := map[string]any{
+		"co2":         i.co2,
+		"hcho":        i.hcho,
+		"pm25":        i.pm25,
+		"temperature": i.temperature,
+		"humidity":    i.humidity,
+	}
+	i.observer.Update(i.guid, state)
 
 }
 
 func (i *Am6108) GetDevice485Setting() (uint32, byte, byte, byte) {
 	return 9600, 0, 8, 1
-}
-
-func (i *Am6108) DBirth() *Payload {
-	p := NewPayload()
-
-	p.Metrics = append(p.Metrics, i.co2, i.hcho, i.pm25, i.temperature, i.humidity)
-
-	return p
-
 }

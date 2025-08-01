@@ -2,15 +2,15 @@ package model
 
 import (
 	"edge/utils"
-	"fmt"
+	"encoding/json"
+	"log"
 	"strconv"
-	"time"
 
-	"google.golang.org/protobuf/proto"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 type LightModule4 struct {
-	status *Payload_Metric
+	status uint8
 
 	addr byte
 
@@ -30,12 +30,6 @@ func NewLightModule4(guid string, c Converter, o Observer) *LightModule4 {
 
 	item := &LightModule4{
 
-		status: &Payload_Metric{
-			Name:      proto.String("status"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt8)),
-			Timestamp: proto.Uint64(0),
-		},
-
 		guid:      guid,
 		Converter: c,
 
@@ -45,12 +39,6 @@ func NewLightModule4(guid string, c Converter, o Observer) *LightModule4 {
 		children: make([]*LightModuleChild, 4),
 	}
 
-	for i := 0; i < 4; i++ {
-		id := fmt.Sprintf("%v-%v", guid, i)
-		child := NewLightModuleChild(id, i, o)
-		item.children[i] = child
-	}
-
 	if adapter, ok := c.(AddrAdapter); ok {
 		item.addr = adapter.GetAddr()
 	} else {
@@ -58,6 +46,15 @@ func NewLightModule4(guid string, c Converter, o Observer) *LightModule4 {
 	}
 
 	return item
+}
+
+func (d *LightModule4) AddChild(child *LightModuleChild) {
+
+	if child.no >= 0 && child.no < 4 {
+		d.children[child.no] = child
+
+	}
+
 }
 
 func (d *LightModule4) Request(command string, params interface{}) {
@@ -91,11 +88,11 @@ func (d *LightModule4) Request(command string, params interface{}) {
 			cmd = 0x02
 		}
 
-		status := d.status.GetIntValue()
+		status := d.status
 		if command == "toggle" {
 			cmd = 0x00
 			mask := 1 << i
-			if (status & uint32(mask)) == 0 {
+			if (status & uint8(mask)) == 0 {
 				cmd = 0x02
 			}
 		}
@@ -139,15 +136,13 @@ func (d *LightModule4) Response(data []byte) {
 
 	cmd := data[1]
 
-	*d.status.Timestamp = uint64(time.Now().UnixMicro())
-
-	old := d.status.GetIntValue()
+	old := d.status
 
 	// full open, full close
 	if cmd == 0x10 {
 		// full open
 		if d.code == 3 {
-			d.status.Value = &Payload_Metric_IntValue{0x0F}
+			d.status = 0x0F
 
 			for _, child := range d.children {
 				child.Set(true)
@@ -155,7 +150,7 @@ func (d *LightModule4) Response(data []byte) {
 		}
 		// full close
 		if d.code == 4 {
-			d.status.Value = &Payload_Metric_IntValue{0}
+			d.status = 0x00
 
 			for _, child := range d.children {
 				child.Set(false)
@@ -177,13 +172,13 @@ func (d *LightModule4) Response(data []byte) {
 		case 0x04:
 
 			v := (1 << no) | old
-			d.status.Value = &Payload_Metric_IntValue{v}
+			d.status = v
 
 			d.children[no].Set(true)
 		case 0x02:
 
 			v := (0x0F - 1<<no) & old
-			d.status.Value = &Payload_Metric_IntValue{v}
+			d.status = v
 
 			d.children[no].Set(false)
 
@@ -197,7 +192,7 @@ func (d *LightModule4) Response(data []byte) {
 		// route 1-8
 		v := data[4]
 
-		statusValue := uint32(0)
+		statusValue := uint8(0)
 
 		for i := 4; i < 8; i++ {
 
@@ -214,13 +209,13 @@ func (d *LightModule4) Response(data []byte) {
 
 		}
 
-		d.status.Value = &Payload_Metric_IntValue{statusValue}
+		d.status = statusValue
 
 	}
 
-	new := d.status.GetIntValue()
+	changed := (old != d.status)
 
-	if new != old {
+	if changed {
 		d.notifyAll()
 	}
 
@@ -235,11 +230,18 @@ func (i *LightModule4) GetType() DEVICE_TYPE {
 
 func (i *LightModule4) notifyAll() {
 
-	p := NewPayload()
+	status := []bool{
+		i.status&0x01 == 0x01,
+		i.status&0x02 == 0x02,
+		i.status&0x04 == 0x04,
+		i.status&0x08 == 0x08,
+	}
 
-	p.Metrics = append(p.Metrics, i.status)
+	state := map[string]interface{}{
+		"status": status,
+	}
 
-	i.observer.Update(i.guid, p)
+	i.observer.Update(i.guid, state)
 
 }
 
@@ -250,11 +252,33 @@ func (i *LightModule4) HeartCheck() {
 	}
 }
 
-func (i *LightModule4) DBirth() *Payload {
-	p := NewPayload()
+func (i *LightModule4) GetChildrenIds() []string {
 
-	p.Metrics = append(p.Metrics, i.status)
+	result := make([]string, 0)
+	for _, child := range i.children {
+		result = append(result, child.GetId())
+	}
 
-	return p
+	return result
+}
 
+func (i *LightModule4) RemoveChildren() {
+	for _, child := range i.children {
+		child.parent = nil
+	}
+
+	i.children = make([]*LightModuleChild, 0)
+}
+
+func (i *LightModule4) CommandRequest(c mqtt.Client, m mqtt.Message) {
+	var cmd CommandData
+
+	err := json.Unmarshal(m.Payload(), &cmd)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal light module-4 command: %v", err)
+		return
+	}
+
+	i.Request(cmd.Command, cmd.Data)
 }

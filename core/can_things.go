@@ -1,240 +1,129 @@
 package core
 
 import (
-	"database/sql"
 	"edge/model"
 	"edge/service"
 	"edge/view"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"log"
+	"maps"
 	"strings"
 	"sync"
 	"time"
-
-	"google.golang.org/protobuf/proto"
 )
-
-type canConverter struct {
-	id int
-	sn string
-
-	// 1: io, 2: 485, 3: relay
-	converterType int
-}
 
 type canThings struct {
 	nodeId string
 
-	// can no ->thing
-	things sync.Map
+	mu     sync.Mutex
+	things map[byte]model.Thing
 
 	connection model.Connection
 
-	convertersCache map[string]*canConverter
-
-	dataChan chan<- *model.SpMessage
+	pubChan chan<- *model.MqttMsg
 
 	view model.Observer
-
-	db *sql.DB
 }
 
-func NewCanThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId string, db *sql.DB) *canThings {
+func (s *canThings) UpdateDevice(device model.Device) {
+	switch device.Operation {
+	case "add":
+		s.add(device)
+
+	case "delete":
+		s.delete(device)
+
+	}
+}
+
+func NewCanThings(conn model.Connection, ch chan<- *model.MqttMsg, nodeId string) *canThings {
 	return &canThings{
 
 		nodeId:     nodeId,
 		connection: conn,
 
-		convertersCache: make(map[string]*canConverter, 128),
+		things:  make(map[byte]model.Thing),
+		pubChan: ch,
 
-		dataChan: ch,
-
-		view: view.NewSparkPlugView(nodeId, ch),
-
-		db: db,
+		view: view.NewShadowView(nodeId, ch),
 	}
 
 }
 
-func (s *canThings) Create(guid string, t model.DEVICE_TYPE, sn string) *model.CommandResponse {
+func (s *canThings) delete(device model.Device) {
 
-	response := &model.CommandResponse{
-		Code: 200,
-	}
+	s.mu.Lock()
 
-	if sn == "" {
-		response.Code = 500
-		response.Error = "no sn value"
+	if thing, ok := s.things[device.CanID]; ok {
 
-		return response
-	}
+		if parent, ok := thing.(model.Parent); ok {
 
-	converter, found := s.convertersCache[sn]
-	if !found {
-		response.Code = 500
-		response.Error = "device of sn value no found"
+			for _, id := range parent.GetChildrenIds() {
+				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", id))
+				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", id))
 
-		return response
-	}
-
-	err := s.addCanThing(guid, int(t), converter.sn, uint8(converter.id), converter.converterType)
-	if err != nil {
-		response.Code = 500
-		response.Error = "add can device error"
-
-		return response
-	}
-
-	err = service.DbAddConverterDevice(s.db, guid, int(t), sn)
-	if err != nil {
-		response.Code = 500
-		response.Error = "save can device error"
-
-		return response
-	}
-
-	return response
-
-}
-
-func (s *canThings) Delete(guid string) {
-
-	s.things.Range(func(key, value any) bool {
-
-		if thing, ok := value.(model.Thing); ok {
-			if thing.GetId() == guid {
-				s.things.Delete(key)
-				service.DbDeleteConverterDevice(s.db, guid)
-				return false
 			}
+			parent.RemoveChildren()
+
 		}
-		return true
-	})
 
-}
+		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", device.UUID))
+		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", device.UUID))
 
-func canConverterBirthPayload(t uint32) *model.Payload {
+		delete(s.things, device.CanID)
 
-	ts := uint64(time.Now().UnixMicro())
-	typeMetric := model.NewConverterTypeMetric(t, ts)
+	}
 
-	p := model.NewPayload()
-	p.Metrics = append(p.Metrics, typeMetric)
-
-	return p
-
+	s.mu.Unlock()
 }
 
 func (s *canThings) heartCheck() {
 
-	s.things.Range(func(key, value any) bool {
-		if thing, ok := value.(model.Thing); ok {
-			thing.HeartCheck()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-			if thing.ConnectedChanged() {
-				// converter := s.convertersCache[thing.GetConverter().GetSN()]
+	for _, thing := range s.things {
+		thing.HeartCheck()
 
-				if thing.IsConnected() {
+		if thing.ConnectedChanged() {
 
-					s.dataChan <- &model.SpMessage{
-						Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, thing.GetId()),
-						Payload: thing.DBirth(),
+			payload := map[string]bool{
+				"connected": thing.IsConnected(),
+			}
+
+			s.pubChan <- &model.MqttMsg{
+				Topic:   fmt.Sprintf("%v/shadow/update/reported", thing.GetId()),
+				Payload: payload,
+			}
+
+			// children connected
+			if parent, ok := thing.(model.Parent); ok {
+				for _, id := range parent.GetChildrenIds() {
+					s.pubChan <- &model.MqttMsg{
+						Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
+						Payload: payload,
 					}
-
-					if parent, ok := thing.(model.Parent); ok {
-						for _, child := range parent.GetChildren() {
-							s.dataChan <- &model.SpMessage{
-								Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, child.GetId()),
-								Payload: child.DBirth(),
-							}
-						}
-					}
-
-					// s.dataChan <- &model.SpMessage{
-					// 	Topic:   fmt.Sprintf("spBv1.0/converters/DBIRTH/%v/%v", s.nodeId, converter.sn),
-					// 	Payload: canConverterBirthPayload(uint32(converter.converterType)),
-					// }
-
-				} else {
-					s.dataChan <- &model.SpMessage{
-						Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, thing.GetId()),
-						Payload: model.NewPayload(),
-					}
-
-					if parent, ok := thing.(model.Parent); ok {
-						for _, child := range parent.GetChildren() {
-							s.dataChan <- &model.SpMessage{
-								Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, child.GetId()),
-								Payload: model.NewPayload(),
-							}
-						}
-					}
-
-					// s.dataChan <- &model.SpMessage{
-					// 	Topic:   fmt.Sprintf("spBv1.0/converters/DDEATH/%v/%v", s.nodeId, converter.sn),
-					// 	Payload: model.NewPayload(),
-					// }
-
 				}
 			}
 
 		}
-		return true
-	})
+	}
+
 }
 
 func (s *canThings) heartBeatRequest() {
 
-	s.things.Range(func(key, value any) bool {
-		if thing, ok := value.(model.Thing); ok {
-			thing.HeartRequest()
-			time.Sleep(2 * time.Second)
-		}
-		return true
+	s.mu.Lock()
+	things := maps.Clone(s.things)
+	s.mu.Unlock()
 
-	})
-
-}
-func (s *canThings) getThingByGuid(guid string) (model.Thing, bool) {
-
-	var result model.Thing
-	found := false
-
-	s.things.Range(func(key, value any) bool {
-		if thing, ok := value.(model.Thing); ok {
-			if thing.GetId() == guid {
-				result = thing
-				found = true
-				return false
-			}
-
-		}
-
-		return true
-	})
-
-	return result, found
-}
-
-func (s *canThings) Request(guid string, data []byte) {
-
-	if thing, found := s.getThingByGuid(guid); found {
-
-		p := &model.Payload{}
-		err := proto.Unmarshal(data, p)
-
-		if err != nil {
-			return
-		}
-
-		for _, m := range p.GetMetrics() {
-
-			cmd := *m.Name
-			param := m.GetStringValue()
-
-			thing.Request(cmd, param)
-		}
+	for _, thing := range things {
+		thing.HeartRequest()
+		time.Sleep(2 * time.Second) // 避免过快请求
 	}
+
 }
 
 func getCode(t int) int {
@@ -254,47 +143,43 @@ func getCode(t int) int {
 	return code
 }
 
-func (s *canThings) generateNO() (byte, error) {
+func (s *canThings) add(device model.Device) error {
 
-	for i := 1; i < 128; i++ {
-
-		used := false
-		for _, c := range s.convertersCache {
-
-			if c.id == i {
-				used = true
-				break
-			}
-
-		}
-		if !used {
-			return byte(i), nil
-		}
-
-	}
-
-	return 0, fmt.Errorf("generate can no failed")
-}
-
-func (s *canThings) addCanThing(guid string, deviceType int, converterSN string, convertNo uint8, converterType int) error {
-
-	code := getCode(converterType)
+	code := getCode(device.ConverterType)
 
 	converter := &model.CanConverter{
-		SN:   converterSN,
-		No:   convertNo,
+		SN:   device.ConverterSN,
+		No:   uint8(device.CanID),
 		Code: code,
 		Tx:   s.connection.Tx,
 	}
 
-	t := model.DEVICE_TYPE(deviceType)
-
-	thing, err := newThing(guid, t, converter, s.view)
+	thing, err := newThing(device.UUID, device.Vendor, device.Model, converter, s.view)
 	if err != nil {
 		return err
 	}
 
-	s.things.Store(convertNo, thing)
+	if parent, ok := thing.(model.Parent); ok {
+
+		for _, child := range device.Children {
+
+			deviceChild := model.NewLightModuleChild(child.UUID, child.No, s.view, thing)
+			topic := fmt.Sprintf("%v/shadow/update/delta", child.UUID)
+			service.GetMqttService().AddTopicHandler(topic, deviceChild.UpdateDelta)
+			service.GetMqttService().AddSubscriptionTopic(topic, 1)
+
+			topic = fmt.Sprintf("commands/%v", child.UUID)
+			service.GetMqttService().AddTopicHandler(topic, deviceChild.CommandRequest)
+			service.GetMqttService().AddSubscriptionTopic(topic, 0)
+
+			parent.AddChild(deviceChild)
+		}
+
+	}
+
+	s.mu.Lock()
+	s.things[byte(device.CanID)] = thing
+	s.mu.Unlock()
 
 	switch thing := thing.(type) {
 	case model.Device485:
@@ -310,62 +195,46 @@ func (s *canThings) addCanThing(guid string, deviceType int, converterSN string,
 	return nil
 }
 
-func (s *canThings) Init() {
-
-	// load converters, devices
-	if converters, err := service.DbGetConverters(s.db, "can"); err == nil {
-		for _, c := range converters {
-			s.addConverter(int(c.CanNo), c.SN, int(c.ConverterType))
-
-			if c.Guid != nil && c.DeviceType != nil {
-				s.addCanThing(*c.Guid, int(*c.DeviceType), c.SN, uint8(c.CanNo), int(c.ConverterType))
-			}
-
-		}
-
-	}
-
-}
-
-func (s *canThings) addConverter(id int, sn string, t int) {
-	item := &canConverter{
-		id:            id,
-		sn:            sn,
-		converterType: t,
-	}
-	s.convertersCache[sn] = item
-
-}
-
 func (s *canThings) converterRegister(data []byte) {
 
 	sn := strings.ToUpper(hex.EncodeToString(data[1:]))
 
-	if c, found := s.convertersCache[sn]; found {
-		model.CanRegist(data[1:], byte(c.id), s.connection.Tx)
-	} else {
-		// new converter
-		if no, err := s.generateNO(); err == nil {
-
-			converter := &service.DbConverter{
-				SN:            sn,
-				ConverterType: int64(data[0]),
-				CanNo:         int64(no),
-			}
-			if _, err := service.DbAddConverter(s.db, converter); err == nil {
-
-				s.addConverter(int(no), sn, int(data[0]))
-
-				model.CanRegist(data[1:], no, s.connection.Tx)
-
-				s.dataChan <- &model.SpMessage{
-					Topic:   fmt.Sprintf("spBv1.0/converters/DBIRTH/%v/%v", s.nodeId, converter.SN),
-					Payload: canConverterBirthPayload(uint32(converter.ConverterType)),
-				}
-
-			}
-		}
+	var tmp struct {
+		Node          string `json:"node"`
+		SN            string `json:"sn"`
+		ConverterType int    `json:"converter_type"`
 	}
+
+	tmp.Node = s.nodeId
+	tmp.SN = sn
+	tmp.ConverterType = int(data[0])
+
+	jsonData, err := json.Marshal(tmp)
+	if err != nil {
+		log.Printf("Failed to marshal converter register data: %v", err)
+		return
+	}
+	topic := fmt.Sprintf("node/%v/converters/register", s.nodeId)
+
+	err = service.DefaultMqttService.PublishMessage(topic, 0, false, jsonData)
+	if err != nil {
+		log.Printf("Failed to publish converter register message: %v", err)
+		return
+
+	}
+}
+
+func (s *canThings) RegisterResult(sn string, canID int) {
+
+	id, err := hex.DecodeString(sn)
+
+	if err != nil {
+		log.Printf("Failed to decode can register converter SN %s: %v", sn, err)
+		return
+	}
+
+	model.CanRegist(id, byte(canID), s.connection.Tx)
+
 }
 
 func (s *canThings) Process() {
@@ -389,20 +258,20 @@ func (s *canThings) Process() {
 
 			// 3: 485
 			if code == 1 || code == 2 || code == 3 {
-
-				if value, ok := s.things.Load(no); ok {
-					thing := value.(model.Thing)
+				s.mu.Lock()
+				if thing, ok := s.things[no]; ok {
 					thing.Response(data)
 				}
-
+				s.mu.Unlock()
 			}
 
 			// heart beat
 			if code == 4 {
-				if value, ok := s.things.Load(no); ok {
-					thing := value.(model.Thing)
+				s.mu.Lock()
+				if thing, ok := s.things[no]; ok {
 					thing.HeartBeat()
 				}
+				s.mu.Unlock()
 			}
 
 		case <-heartSendTick.C:

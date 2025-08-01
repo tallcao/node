@@ -4,17 +4,15 @@ import (
 	"edge/utils"
 	"encoding/json"
 	"log"
-	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"google.golang.org/protobuf/proto"
 )
 
 type Motor struct {
-	percent   *Payload_Metric
-	direction *Payload_Metric
-	pull      *Payload_Metric
-	status    *Payload_Metric
+	percent   uint8
+	direction uint8
+	pull      uint8
+	status    uint8
 
 	guid string
 
@@ -23,7 +21,7 @@ type Motor struct {
 	Converter
 	addr uint8
 
-	IHeart *Heart
+	IHeart
 }
 
 type percentData struct {
@@ -33,26 +31,6 @@ type percentData struct {
 func NewMotor(guid string, c Converter, o Observer) *Motor {
 
 	item := &Motor{
-		percent: &Payload_Metric{
-			Name:      proto.String("percent"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt8)),
-			Timestamp: proto.Uint64(0),
-		},
-		direction: &Payload_Metric{
-			Name:      proto.String("direction"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt8)),
-			Timestamp: proto.Uint64(0),
-		},
-		pull: &Payload_Metric{
-			Name:      proto.String("pull"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt8)),
-			Timestamp: proto.Uint64(0),
-		},
-		status: &Payload_Metric{
-			Name:      proto.String("status"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt8)),
-			Timestamp: proto.Uint64(0),
-		},
 
 		guid:      guid,
 		Converter: c,
@@ -119,13 +97,13 @@ func (i *Motor) Response(data []byte) {
 
 	}
 
-	var percent uint8
-	var direction uint8
-	var pull uint8
-	var status uint8
+	// percent :=i.percent
+	// direction := i.direction
+	// pull := i.pull
+	// status := i.status
 
 	if data[3] == 0x03 && data[4] == 0x03 && len(data) == 16 {
-		percent = data[13]
+		i.percent = data[13]
 	}
 
 	if data[3] == 0x01 && len(data) == 9 {
@@ -133,36 +111,22 @@ func (i *Motor) Response(data []byte) {
 		addr := data[4]
 		val := data[6]
 		if addr == 0x02 {
-			percent = val
+			i.percent = val
 
 		}
 		if addr == 0x03 {
-			direction = val
+			i.direction = val
 
 		}
 		if addr == 0x04 {
-			pull = val
+			i.pull = val
 
 		}
 		if addr == 0x05 {
-			status = val
+			i.status = val
 
 		}
 	}
-
-	ts := uint64(time.Now().UnixMicro())
-
-	i.percent.Value = &Payload_Metric_IntValue{uint32(percent)}
-	*i.percent.Timestamp = ts
-
-	i.direction.Value = &Payload_Metric_IntValue{uint32(direction)}
-	*i.direction.Timestamp = ts
-
-	i.pull.Value = &Payload_Metric_IntValue{uint32(pull)}
-	*i.pull.Timestamp = ts
-
-	i.status.Value = &Payload_Metric_IntValue{uint32(status)}
-	*i.status.Timestamp = ts
 
 	i.notifyAll()
 
@@ -178,9 +142,13 @@ func (i *Motor) GetType() DEVICE_TYPE {
 
 func (i *Motor) notifyAll() {
 
-	p := NewPayload()
-	p.Metrics = append(p.Metrics, i.percent, i.direction, i.pull, i.status)
-	i.observer.Update(i.guid, p)
+	state := map[string]interface{}{
+		"percent":   i.percent,
+		"direction": i.direction,
+		"pull":      i.pull,
+		"status":    i.status,
+	}
+	i.observer.Update(i.guid, state)
 
 }
 
@@ -195,35 +163,26 @@ func (i *Motor) HeartCheck() {
 	}
 }
 
-func (i *Motor) DBirth() *Payload {
-	p := NewPayload()
-
-	p.Metrics = append(p.Metrics, i.percent, i.direction, i.pull, i.status)
-
-	return p
-
-}
 func (i *Motor) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
-	var update struct {
-		Percent uint32 `json:"percent"`
+	var desired struct {
+		Percent uint8 `json:"percent"`
 	}
 
-	err := json.Unmarshal(m.Payload(), &update)
+	err := json.Unmarshal(m.Payload(), &desired)
 
 	if err != nil {
 		log.Printf("ERROR: Failed to unmarshal e-valve update delta: %v", err)
 		return
 	}
 
-	currentPercent := i.percent.GetIntValue()
-	if update.Percent > 100 {
-		log.Printf("ERROR: Invalid percent value %d for motor curtain %s", update.Percent, i.guid)
+	if desired.Percent > 100 {
+		log.Printf("ERROR: Invalid percent value %d for motor curtain %s", desired.Percent, i.guid)
 		return
 	}
-	if update.Percent != currentPercent {
+	if desired.Percent != i.percent {
 
-		data := []byte{i.addr, 0xFE, 0xFE, 0x03, 0x04, byte(update.Percent)}
+		data := []byte{i.addr, 0xFE, 0xFE, 0x03, 0x04, byte(desired.Percent)}
 		crc, err := utils.CRC16(data)
 		if err != nil {
 			log.Printf("ERROR: Failed to calculate CRC16 for motor curtain %s: %v", i.guid, err)
@@ -232,4 +191,17 @@ func (i *Motor) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 		data = append(data, crc...)
 		i.SendFrame(data)
 	}
+}
+
+func (i *Motor) CommandRequest(c mqtt.Client, m mqtt.Message) {
+	var cmd CommandData
+
+	err := json.Unmarshal(m.Payload(), &cmd)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal motor command: %v", err)
+		return
+	}
+
+	i.Request(cmd.Command, cmd.Data)
 }

@@ -6,38 +6,42 @@ import (
 	"fmt"
 )
 
-func newThing(guid string, t model.DEVICE_TYPE, c model.Converter, v model.Observer) (model.Thing, error) {
+func newThing(guid string, vendor, m string, c model.Converter, v model.Observer) (model.Thing, error) {
+
+	if vendor != "ztnet" {
+		return nil, fmt.Errorf("unsupported vendor: %s", vendor)
+	}
 
 	var thing model.Thing
 
-	switch t {
-	// case model.DEVICE_TYPE_MOTOR:
-	// 	thing = model.NewMotor(guid, c, v)
-	case model.DEVICE_TYPE_DOOR:
+	switch m {
+	case model.DeviceModelMotor:
+		thing = model.NewMotor(guid, c, v)
+	case model.DeviceModelDoor:
 		thing = model.NewDoor(guid, c, v)
-	case model.DEVICE_TYPE_BODY:
+	case model.DeviceModelBody:
 		thing = model.NewBodySensor(guid, c, v)
-	case model.DEVICE_TYPE_AM6108:
+	case model.DeviceModelAM6108:
 		thing = model.NewAm6108(guid, c, v)
 	// case DEVICE_TYPE_BREAKER:
 	// 	thing = &Breaker{Addr: 0x01}
 	// case DEVICE_TYPE_BREAKER_N:
 	// 	thing = &BreakerN{}
-	case model.DEVICE_TYPE_BREAKER_STB3_125_R:
+	case model.DeviceModelStb3125r:
 		thing = model.NewBreaker_STB3_125_R(guid, c, v)
-	case model.DEVICE_TYPE_BREAKER_STB3_125_RJ:
+	case model.DeviceModelStb3125rj:
 		thing = model.NewBreaker_STB3_125_RJ(guid, c, v)
 	// case DEVICE_TYPE_IRACC:
 	// 	thing = &Iracc{}
 	// case DEVICE_TYPE_IRACC_GATEWAY:
 	// 	thing = &IraccGateway{}
-	case model.DEVICE_TYPE_E_VALVE:
+	case model.DeviceModelEValve:
 		thing = model.NewEValve(guid, c, v)
-	case model.DEVICE_TYPE_LIGHT:
+	case model.DeviceModelLight:
 		thing = model.NewLight(guid, c, v)
-	case model.DEVICE_TYPE_SOIL_SENSOR:
+	case model.DeviceModelSoilSensor:
 		thing = model.NewSoilSensor(guid, c, v)
-	case model.DEVICE_TYPE_BODY_V4:
+	case model.DeviceModelBodyV4:
 		thing = model.NewBodySensorV4(guid, c, v)
 		// case DEVICE_TYPE_VOLTAGE_MODULE:
 		// 	thing = &VoltageModule{}
@@ -52,21 +56,21 @@ func newThing(guid string, t model.DEVICE_TYPE, c model.Converter, v model.Obser
 		// 	thing = &Breaker_STB3L_125_R{Addr: 0x01}
 		// case DEVICE_TYPE_BREAKER_STB3L_125_RJ:
 		// 	thing = &Breaker_STB3L_125_RJ{Addr: 0x01}
-	// case model.DEVICE_TYPE_MOTOR_FR:
-	// 	thing = model.NewMotorFR(guid, c, v)
-	case model.DEVICE_TYPE_RAIN:
+	case model.DeviceModelMotorFr:
+		thing = model.NewMotorFR(guid, c, v)
+	case model.DeviceModelRainSensor:
 		thing = model.NewRainSensor(guid, c, v)
-	// case model.DEVICE_TYPE_MOTOR_CURTAIN:
-	// 	thing = model.NewMotorCurtain(guid, c, v)
-	case model.DEVICE_TYPE_LIGHTING_MODULE_4:
+	case model.DeviceModelMotorCurtain:
+		thing = model.NewMotorCurtain(guid, c, v)
+	case model.DeviceModelLightModule4:
 		thing = model.NewLightModule4(guid, c, v)
-	case model.DEVICE_TYPE_LIGHTING_MODULE_8:
+	case model.DeviceModelLightModule8:
 		thing = model.NewLightModule8(guid, c, v)
-	case model.DEVICE_TYPE_LIGHTING_MODULE_16:
+	case model.DeviceModelLightModule16:
 		thing = model.NewLightModule16(guid, c, v)
-	case model.DEVICE_TYPE_LORA_PANEL:
+	case model.DeviceModelLoraPanel:
 		thing = model.NewLoraPanel(guid, c, v)
-	case model.DEVICE_TYPE_R1016:
+	case model.DeviceModelR1016:
 		thing = model.NewR1016(guid, c, v)
 	default:
 		return nil, fmt.Errorf("new thing error")
@@ -78,6 +82,14 @@ func newThing(guid string, t model.DEVICE_TYPE, c model.Converter, v model.Obser
 		topic := fmt.Sprintf("%v/shadow/update/delta", guid)
 		service.GetMqttService().AddTopicHandler(topic, shadow.UpdateDelta)
 		service.GetMqttService().AddSubscriptionTopic(topic, 1)
+
+	}
+
+	if cmd, ok := thing.(model.Command); ok {
+
+		topic := fmt.Sprintf("commands/%v", guid)
+		service.GetMqttService().AddTopicHandler(topic, cmd.CommandRequest)
+		service.GetMqttService().AddSubscriptionTopic(topic, 0)
 
 	}
 

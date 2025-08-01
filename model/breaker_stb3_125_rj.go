@@ -7,15 +7,14 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"google.golang.org/protobuf/proto"
 )
 
 // stb3-125/RJ 带计量断路器
 
 type Breaker_STB3_125_RJ struct {
-	lock     *Payload_Metric
-	on       *Payload_Metric
-	quantity *Payload_Metric
+	lock     bool
+	on       bool
+	quantity float32
 
 	guid string
 
@@ -32,21 +31,6 @@ type Breaker_STB3_125_RJ struct {
 func NewBreaker_STB3_125_RJ(guid string, c Converter, o Observer) *Breaker_STB3_125_RJ {
 
 	item := &Breaker_STB3_125_RJ{
-		lock: &Payload_Metric{
-			Name:      proto.String("lock"),
-			Datatype:  proto.Uint32(uint32(DataType_Boolean)),
-			Timestamp: proto.Uint64(0),
-		},
-		on: &Payload_Metric{
-			Name:      proto.String("on"),
-			Datatype:  proto.Uint32(uint32(DataType_Boolean)),
-			Timestamp: proto.Uint64(0),
-		},
-		quantity: &Payload_Metric{
-			Name:      proto.String("quantity"),
-			Datatype:  proto.Uint32(uint32(DataType_Float)),
-			Timestamp: proto.Uint64(0),
-		},
 
 		guid:      guid,
 		Converter: c,
@@ -90,7 +74,7 @@ func (i *Breaker_STB3_125_RJ) Request(command string, params interface{}) {
 		data = append(data, 0x05, 0x00, 0x01, 0x00, 0x00)
 	case "toggle":
 		v := byte(0xff)
-		if i.on.GetBooleanValue() {
+		if i.on {
 			v = 0
 		}
 		data = append(data, 0x05, 0x00, 0x01, v, 0x00)
@@ -114,18 +98,18 @@ func (d *Breaker_STB3_125_RJ) Response(data []byte) {
 		return
 	}
 
-	on := d.on.GetBooleanValue()
-	lock := d.lock.GetBooleanValue()
-	quantity := d.quantity.GetFloatValue()
+	on := d.on
+	lock := d.lock
+	quantity := d.quantity
 
 	if len(data) == 8 && data[1] == 0x05 {
 
 		if data[4] == 0xFF {
-			on = true
+			d.on = true
 		}
 
 		if data[4] == 0x00 {
-			on = false
+			d.on = false
 		}
 
 	}
@@ -133,63 +117,35 @@ func (d *Breaker_STB3_125_RJ) Response(data []byte) {
 	if len(data) == 7 && data[1] == 0x04 {
 
 		if data[3] == 0x00 {
-			lock = false
+			d.lock = false
 
 		}
 		if data[3] == 0x01 {
-			lock = true
+			d.lock = true
 
 		}
 		if data[4] == 0xF0 {
-			lock = true
+			d.lock = true
 
 		}
 		if data[4] == 0x0F {
-			lock = false
+			d.lock = false
 
 		}
 
 	}
 
 	if len(data) == 9 && data[1] == 0x04 {
-		quantity = float32(data[3])*256 + float32(data[4]) + (float32(data[5])*256+float32(data[6]))*0.001
+		d.quantity = float32(data[3])*256 + float32(data[4]) + (float32(data[5])*256+float32(data[6]))*0.001
 
 	}
 
-	onChanged := (on != d.on.GetBooleanValue())
-	lockChanged := (lock != d.lock.GetBooleanValue())
-	quantityChanged := (quantity != d.quantity.GetFloatValue())
+	onChanged := (on != d.on)
+	lockChanged := (lock != d.lock)
+	quantityChanged := (quantity != d.quantity)
 
-	ts := uint64(time.Now().UnixMicro())
-
-	d.on.Value = &Payload_Metric_BooleanValue{on}
-	*d.on.Timestamp = ts
-
-	d.lock.Value = &Payload_Metric_BooleanValue{lock}
-	*d.lock.Timestamp = ts
-
-	d.quantity.Value = &Payload_Metric_FloatValue{quantity}
-	*d.quantity.Timestamp = ts
-
-	p := NewPayload()
-
-	if onChanged {
-		p.Metrics = append(p.Metrics, d.on)
-	}
-
-	if lockChanged {
-		p.Metrics = append(p.Metrics, d.lock)
-
-	}
-	if quantityChanged {
-		p.Metrics = append(p.Metrics, d.quantity)
-
-	}
-
-	if len(p.Metrics) > 0 {
-
-		d.observer.Update(d.guid, p)
-
+	if onChanged || lockChanged || quantityChanged {
+		d.notifyAll()
 	}
 
 }
@@ -204,10 +160,13 @@ func (i *Breaker_STB3_125_RJ) GetType() DEVICE_TYPE {
 
 func (i *Breaker_STB3_125_RJ) notifyAll() {
 
-	p := NewPayload()
-	p.Metrics = append(p.Metrics, i.on, i.lock, i.quantity)
+	state := map[string]any{
+		"on":       i.on,
+		"lock":     i.lock,
+		"quantity": i.quantity,
+	}
 
-	i.observer.Update(i.guid, p)
+	i.observer.Update(i.guid, state)
 }
 
 func (i *Breaker_STB3_125_RJ) StartLoopRequest() {
@@ -227,32 +186,24 @@ func (i *Breaker_STB3_125_RJ) HeartCheck() {
 	}
 }
 
-func (i *Breaker_STB3_125_RJ) DBirth() *Payload {
-	p := NewPayload()
-
-	p.Metrics = append(p.Metrics, i.lock, i.on, i.quantity)
-
-	return p
-
-}
 func (i *Breaker_STB3_125_RJ) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
-	var update struct {
+	var desired struct {
 		On bool `json:"on"`
 	}
 
-	err := json.Unmarshal(m.Payload(), &update)
+	err := json.Unmarshal(m.Payload(), &desired)
 
 	if err != nil {
 		log.Printf("ERROR: Failed to unmarshal breaker stb3-125-RJ update delta: %v", err)
 		return
 	}
 
-	currentOn := i.on.GetBooleanValue()
-	if update.On != currentOn {
+	currentOn := i.on
+	if desired.On != currentOn {
 
 		data := []byte{i.addr}
-		switch update.On {
+		switch desired.On {
 		case true:
 			data = append(data, 0x05, 0x00, 0x01, 0xFF, 0x00)
 		case false:
@@ -267,4 +218,17 @@ func (i *Breaker_STB3_125_RJ) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
 		i.SendFrame(data)
 	}
+}
+
+func (i *Breaker_STB3_125_RJ) CommandRequest(c mqtt.Client, m mqtt.Message) {
+	var cmd CommandData
+
+	err := json.Unmarshal(m.Payload(), &cmd)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal breaker stb3-125-rj command: %v", err)
+		return
+	}
+
+	i.Request(cmd.Command, cmd.Data)
 }

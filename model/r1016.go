@@ -1,15 +1,16 @@
 package model
 
 import (
-	"fmt"
+	"encoding/json"
+	"log"
 	"strconv"
 	"time"
 
-	"google.golang.org/protobuf/proto"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 type R1016 struct {
-	status *Payload_Metric
+	status uint16
 
 	addr byte
 
@@ -26,11 +27,6 @@ type R1016 struct {
 func NewR1016(guid string, c Converter, o Observer) *R1016 {
 
 	item := &R1016{
-		status: &Payload_Metric{
-			Name:      proto.String("status"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt16)),
-			Timestamp: proto.Uint64(0),
-		},
 
 		guid: guid,
 
@@ -40,13 +36,6 @@ func NewR1016(guid string, c Converter, o Observer) *R1016 {
 
 		observer: o,
 		children: make([]*LightModuleChild, 16),
-	}
-
-	for i := 0; i < 16; i++ {
-
-		id := fmt.Sprintf("%v-%v", guid, i)
-		child := NewLightModuleChild(id, i, o)
-		item.children[i] = child
 	}
 
 	if adapter, ok := c.(AddrAdapter); ok {
@@ -127,25 +116,23 @@ func (d *R1016) Response(data []byte) {
 		return
 	}
 
-	*d.status.Timestamp = uint64(time.Now().UnixMicro())
+	old := d.status
 
-	old := d.status.GetIntValue()
-
-	statusValue := uint32(0)
+	statusValue := uint16(0)
 
 	for i := 0; i < 16; i++ {
 
 		v := data[i+5]
-		statusValue += uint32(v << i)
+		statusValue += uint16(v << i)
 
 		d.children[i].Set(v == 0x01)
 
 	}
-	d.status.Value = &Payload_Metric_IntValue{statusValue}
+	d.status = statusValue
 
-	new := d.status.GetIntValue()
+	changed := (old != d.status)
 
-	if new != old {
+	if changed {
 		d.notifyAll()
 	}
 
@@ -160,11 +147,30 @@ func (i *R1016) GetType() DEVICE_TYPE {
 
 func (i *R1016) notifyAll() {
 
-	p := NewPayload()
+	status := []bool{
+		i.status&0x0001 == 0x0001,
+		i.status&0x0002 == 0x0002,
+		i.status&0x0004 == 0x0004,
+		i.status&0x0008 == 0x0008,
+		i.status&0x0010 == 0x0010,
+		i.status&0x0020 == 0x0020,
+		i.status&0x0040 == 0x0040,
+		i.status&0x0080 == 0x0080,
+		i.status&0x0100 == 0x0100,
+		i.status&0x0200 == 0x0200,
+		i.status&0x0400 == 0x0400,
+		i.status&0x0800 == 0x0800,
+		i.status&0x1000 == 0x1000,
+		i.status&0x2000 == 0x2000,
+		i.status&0x4000 == 0x4000,
+		i.status&0x8000 == 0x8000,
+	}
 
-	p.Metrics = append(p.Metrics, i.status)
+	state := map[string]interface{}{
+		"status": status,
+	}
 
-	i.observer.Update(i.guid, p)
+	i.observer.Update(i.guid, state)
 
 }
 
@@ -175,11 +181,43 @@ func (i *R1016) HeartCheck() {
 	}
 }
 
-func (i *R1016) DBirth() *Payload {
-	p := NewPayload()
+func (d *R1016) AddChild(child *LightModuleChild) {
 
-	p.Metrics = append(p.Metrics, i.status)
+	if child.no >= 0 && child.no < 16 {
+		d.children[child.no] = child
 
-	return p
+	}
 
+}
+
+func (i *R1016) GetChildrenIds() []string {
+
+	result := make([]string, 0)
+	for _, child := range i.children {
+		result = append(result, child.GetId())
+	}
+
+	return result
+}
+
+func (i *R1016) RemoveChildren() {
+
+	for _, child := range i.children {
+		child.parent = nil
+	}
+
+	i.children = make([]*LightModuleChild, 0)
+}
+
+func (i *R1016) CommandRequest(c mqtt.Client, m mqtt.Message) {
+	var cmd CommandData
+
+	err := json.Unmarshal(m.Payload(), &cmd)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal r1016 command: %v", err)
+		return
+	}
+
+	i.Request(cmd.Command, cmd.Data)
 }

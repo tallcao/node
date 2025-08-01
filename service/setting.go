@@ -73,7 +73,7 @@ func settingDHCP() error {
 	s := new(SettingIP)
 	s.Method = "dhcp"
 	data, _ := json.Marshal(s)
-	ioutil.WriteFile(SettingIPFile, data, 0666)
+	os.WriteFile(SettingIPFile, data, 0666)
 
 	return nil
 }

@@ -1,100 +1,124 @@
 package core
 
 import (
-	"database/sql"
 	"edge/model"
 	"edge/service"
 	"edge/view"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"log"
+	"maps"
 	"strings"
 	"sync"
 	"time"
 
-	"google.golang.org/protobuf/proto"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-type loraConverter struct {
-	sn            string
-	converterType int
-}
-
-// type panels struct {
-// 	Panels    []*model.LoraPanel
-// 	Timestamp int64
-// }
-
 type loraThings struct {
-	nodeId string
-
-	// converter sn ->thing
-	things sync.Map
-
+	nodeId     string
+	mu         sync.Mutex
+	things     map[string]model.Thing
 	connection model.Connection
 
-	// key: sn
-	// panels map[string]*model.LoraPanel
+	pubChan chan<- *model.MqttMsg
 
-	// ActionChan chan *model.DeviceAction
-
-	converterLoraCache map[string]*loraConverter
-	// converterPanelCache []*loraPanel
-	// converterPanelCache map[string]*loraPanel
-
-	isParing bool
-
-	dataChan chan<- *model.SpMessage
-
-	view model.Observer
-
-	db *sql.DB
+	isParing    bool
+	paringMutex sync.Mutex
+	view        model.Observer
 }
 
-func NewLoraThings(conn model.Connection, ch chan<- *model.SpMessage, nodeId string, db *sql.DB) *loraThings {
+func (s *loraThings) UpdateDevice(device model.Device) {
+	switch device.Operation {
+	case "add":
+		s.add(device)
+
+	case "delete":
+		s.delete(device)
+	}
+}
+
+func NewLoraThings(conn model.Connection, ch chan<- *model.MqttMsg, nodeId string) *loraThings {
 	return &loraThings{
 		nodeId:     nodeId,
+		things:     make(map[string]model.Thing),
 		connection: conn,
-		// updatePanelsChan: make(chan []byte),
-
-		// ActionChan: make(chan *model.DeviceAction),
-		// things: make(map[string]model.Thing, 128),
-
-		converterLoraCache: make(map[string]*loraConverter, 128),
-		// converterPanelCache: make([]*loraPanel, 0, 64),
-		// converterPanelCache: make(map[string]*loraPanel, 64),
-
-		dataChan: ch,
-
-		view: view.NewSparkPlugView(nodeId, ch),
-
-		db: db,
+		view:       view.NewShadowView(nodeId, ch),
+		pubChan:    ch,
 	}
+}
+
+func (s *loraThings) PermitJoinCallback(c mqtt.Client, m mqtt.Message) {
+
+	var data struct {
+		Time int64 `json:"time"`
+	}
+
+	err := json.Unmarshal(m.Payload(), &data)
+
+	if err != nil {
+		return
+	}
+
+	s.paringMutex.Lock()         // Lock the mutex to ensure thread safety
+	defer s.paringMutex.Unlock() // Ensure the mutex is unlocked after processing
+	if s.isParing {
+		return
+	}
+	s.isParing = true
+
+	go func() {
+		time.Sleep(time.Second * time.Duration(data.Time))
+		s.paringMutex.Lock()
+		s.isParing = false
+		s.paringMutex.Unlock()
+	}()
 
 }
 
-func (s *loraThings) addLoraThing(guid string, deviceType int, converterSN string, converterType int) error {
+func (s *loraThings) add(device model.Device) error {
 
-	id, err := hex.DecodeString(converterSN)
+	id, err := hex.DecodeString(device.ConverterSN)
 
 	if err != nil {
 		return err
 	}
-	cmd := getLoraCmd(converterType)
+	cmd := getLoraCmd(device.ConverterType)
 
 	converter := &model.LoraConverter{
-		SN:       converterSN,
+		SN:       device.ConverterSN,
 		Id:       id,
 		Cmd:      cmd,
-		LoraType: converterType,
+		LoraType: device.ConverterType,
 		Tx:       s.connection.Tx,
 	}
 
-	thing, err := newThing(guid, model.DEVICE_TYPE(deviceType), converter, s.view)
+	thing, err := newThing(device.UUID, device.Vendor, device.Model, converter, s.view)
 	if err != nil {
 		return err
 	}
-	s.things.Store(converterSN, thing)
 
+	if parent, ok := thing.(model.Parent); ok {
+		for _, child := range device.Children {
+
+			deviceChild := model.NewLightModuleChild(child.UUID, child.No, s.view, thing)
+			topic := fmt.Sprintf("%v/shadow/update/delta", child.UUID)
+			service.GetMqttService().AddTopicHandler(topic, deviceChild.UpdateDelta)
+			service.GetMqttService().AddSubscriptionTopic(topic, 1)
+
+			topic = fmt.Sprintf("commands/%v", child.UUID)
+			service.GetMqttService().AddTopicHandler(topic, deviceChild.CommandRequest)
+			service.GetMqttService().AddSubscriptionTopic(topic, 0)
+
+			parent.AddChild(deviceChild)
+		}
+
+	}
+
+	s.mu.Lock()
+	s.things[device.ConverterSN] = thing
+	s.mu.Unlock()
 	switch thing := thing.(type) {
 	case model.Device485:
 		converter.Setting485(thing.GetDevice485Setting())
@@ -107,165 +131,72 @@ func (s *loraThings) addLoraThing(guid string, deviceType int, converterSN strin
 	return nil
 }
 
-func (s *loraThings) Create(guid string, t model.DEVICE_TYPE, sn string) *model.CommandResponse {
+func (s *loraThings) delete(device model.Device) {
 
-	response := &model.CommandResponse{
-		Code: 200,
-	}
+	if thing, ok := s.things[device.ConverterSN]; ok {
 
-	if sn == "" {
-		response.Code = 500
-		response.Error = "no sn value"
+		if parent, ok := thing.(model.Parent); ok {
 
-		return response
-	}
+			for _, id := range parent.GetChildrenIds() {
+				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", id))
+				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", id))
 
-	converter, found := s.converterLoraCache[sn]
-	if !found {
-		response.Code = 500
-		response.Error = "device of sn value no found"
-
-		return response
-	}
-
-	err := s.addLoraThing(guid, int(t), converter.sn, converter.converterType)
-	if err != nil {
-		response.Code = 500
-		response.Error = "add can device error"
-
-		return response
-	}
-
-	err = service.DbAddConverterDevice(s.db, guid, int(t), sn)
-	if err != nil {
-		response.Code = 500
-		response.Error = "save can device error"
-
-		return response
-	}
-
-	return response
-
-}
-
-func (s *loraThings) Delete(guid string) {
-
-	s.things.Range(func(key, value any) bool {
-
-		if thing, ok := value.(model.Thing); ok {
-			if thing.GetId() == guid {
-				s.things.Delete(key)
-				service.DbDeleteConverterDevice(s.db, guid)
-				return false
 			}
+			parent.RemoveChildren()
 		}
-		return true
-	})
+		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", device.UUID))
+		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", device.UUID))
 
-}
+		delete(s.things, device.ConverterSN)
 
-func loraConverterBirthPayload(t int) *model.Payload {
+	}
 
-	ts := uint64(time.Now().UnixMicro())
-	typeMetric := model.NewConverterTypeMetric(uint32(t), ts)
-
-	p := model.NewPayload()
-	p.Metrics = append(p.Metrics, typeMetric)
-
-	return p
-
+	s.mu.Unlock()
 }
 
 func (s *loraThings) heartCheck() {
 
-	s.things.Range(func(key, value any) bool {
-		if thing, ok := value.(model.Thing); ok {
-			thing.HeartCheck()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-			if thing.ConnectedChanged() {
-				// converter := s.converterLoraCache[thing.GetConverter().GetSN()]
+	for _, thing := range s.things {
+		thing.HeartCheck()
 
-				if thing.IsConnected() {
+		if thing.ConnectedChanged() {
 
-					s.dataChan <- &model.SpMessage{
-						Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, thing.GetId()),
-						Payload: thing.DBirth(),
-					}
-
-					if parent, ok := thing.(model.Parent); ok {
-						for _, child := range parent.GetChildren() {
-							s.dataChan <- &model.SpMessage{
-								Topic:   fmt.Sprintf("spBv1.0/devices/DBIRTH/%v/%v", s.nodeId, child.GetId()),
-								Payload: child.DBirth(),
-							}
-						}
-					}
-
-					// s.dataChan <- &model.SpMessage{
-					// 	Topic:   fmt.Sprintf("spBv1.0/converters/DBIRTH/%v/%v", s.nodeId, converter.sn),
-					// 	Payload: loraConverterBirthPayload(converter.converterType),
-					// }
-				} else {
-					s.dataChan <- &model.SpMessage{
-						Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, thing.GetId()),
-						Payload: model.NewPayload(),
-					}
-
-					if parent, ok := thing.(model.Parent); ok {
-						for _, child := range parent.GetChildren() {
-							s.dataChan <- &model.SpMessage{
-								Topic:   fmt.Sprintf("spBv1.0/devices/DDEATH/%v/%v", s.nodeId, child.GetId()),
-								Payload: model.NewPayload(),
-							}
-						}
-					}
-
-					// s.dataChan <- &model.SpMessage{
-					// 	Topic:   fmt.Sprintf("spBv1.0/converters/DDEATH/%v/%v", s.nodeId, converter.sn),
-					// 	Payload: model.NewPayload(),
-					// }
-				}
+			payload := map[string]bool{
+				"connected": thing.IsConnected(),
 			}
 
+			s.pubChan <- &model.MqttMsg{
+				Topic:   fmt.Sprintf("%v/shadow/update/reported", thing.GetId()),
+				Payload: payload,
+			}
+			// children connected
+			if parent, ok := thing.(model.Parent); ok {
+				for _, id := range parent.GetChildrenIds() {
+					s.pubChan <- &model.MqttMsg{
+						Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
+						Payload: payload,
+					}
+				}
+			}
 		}
-		return true
-
-	})
+	}
 
 }
 
 func (s *loraThings) heartBeatRequest() {
 
-	s.things.Range(func(key, value interface{}) bool {
-		if thing, ok := value.(model.Thing); ok {
-			thing.HeartRequest()
-			time.Sleep(3 * time.Second)
-		}
-		return true
+	s.mu.Lock()
+	things := maps.Clone(s.things)
+	s.mu.Unlock()
 
-	})
-
-}
-
-func (s *loraThings) Request(guid string, data []byte) {
-
-	if thing, found := s.getThingByGuid(guid); found {
-
-		p := &model.Payload{}
-		err := proto.Unmarshal(data, p)
-
-		if err != nil {
-			return
-		}
-
-		for _, m := range p.GetMetrics() {
-
-			cmd := *m.Name
-			param := m.Value
-
-			thing.Request(cmd, param)
-		}
+	for _, thing := range things {
+		thing.HeartRequest()
+		time.Sleep(3 * time.Second) // 避免过快请求
 	}
+
 }
 
 func getLoraCmd(t int) byte {
@@ -282,24 +213,44 @@ func getLoraCmd(t int) byte {
 	return cmd
 }
 
-func (s *loraThings) addConverter(sn string, t int) {
+func (s *loraThings) RegisterResult(sn string) {
 
-	item := &loraConverter{
-		sn:            sn,
-		converterType: t,
-	}
-	s.converterLoraCache[sn] = item
-}
+	id, err := hex.DecodeString(sn)
 
-func (s *loraThings) Paring(t int) {
-
-	if s.isParing {
+	if err != nil {
+		log.Printf("Failed to decode lora register converter SN %s: %v", sn, err)
 		return
 	}
-	s.isParing = true
-	time.Sleep(time.Minute * time.Duration(t))
-	s.isParing = false
+	model.LoraRegist(id, s.connection.Tx)
 
+}
+func (s *loraThings) converterRegister(data []byte) {
+	sn := strings.ToUpper(hex.EncodeToString(data[3:7]))
+	t := 4 + data[2] - 0xF2
+
+	var tmp struct {
+		Node          string `json:"node"`
+		SN            string `json:"sn"`
+		ConverterType int    `json:"converter_type"`
+	}
+
+	tmp.Node = s.nodeId
+	tmp.SN = sn
+	tmp.ConverterType = int(t)
+
+	jsonData, err := json.Marshal(tmp)
+	if err != nil {
+		log.Printf("Failed to marshal converter register data: %v", err)
+		return
+	}
+	topic := fmt.Sprintf("node/%v/converters/register", s.nodeId)
+
+	err = service.DefaultMqttService.PublishMessage(topic, 0, false, jsonData)
+	if err != nil {
+		log.Printf("Failed to publish converter register message: %v", err)
+		return
+
+	}
 }
 
 func (s *loraThings) Process() {
@@ -328,50 +279,53 @@ func (s *loraThings) Process() {
 			// 0x85: 485, 0x83: io, 0x82: button
 			case 0x85, 0x83, 0x82:
 				if len > 7 {
-					if value, ok := s.things.Load(sn); ok {
-						thing := value.(model.Thing)
+					s.mu.Lock()
+					if thing, ok := s.things[sn]; ok {
+
 						thing.HeartBeat()
 						if len > 8 {
 							thing.Response(frame[7 : len-1])
 						}
 					}
+					s.mu.Unlock()
 				}
 			// panel register
 			case 0xF1:
 				if len == 8 && s.isParing {
-					model.LoraRegist(id, s.connection.Tx)
+					// lora panel
+					if cmd == 0xF1 {
 
-					s.dataChan <- &model.SpMessage{
-						Topic: fmt.Sprintf("spBv1.0/lora-panels/DBIRTH/%v/%v", s.nodeId, sn),
-						// Payload: loraPanelBirthPayload(guid),
-						Payload: model.NewPayload(),
-					}
-
-				}
-
-			//0xF2 io register, 0xF3 485 register
-			case 0xF2, 0xF3:
-				if len == 8 && s.isParing {
-					model.LoraRegist(id, s.connection.Tx)
-
-					t := 4 + cmd - 0xF2
-
-					converter := &service.DbConverter{
-						SN:            sn,
-						ConverterType: int64(t),
-					}
-					if _, err := service.DbAddConverter(s.db, converter); err == nil {
-
-						s.addConverter(sn, int(t))
-
-						s.dataChan <- &model.SpMessage{
-							Topic:   fmt.Sprintf("spBv1.0/converters/DBIRTH/%v/%v", s.nodeId, converter.SN),
-							Payload: loraConverterBirthPayload(int(converter.ConverterType)),
+						var data struct {
+							Node string `json:"node"`
+							SN   string `json:"sn"`
 						}
 
-					}
+						data.Node = s.nodeId
+						data.SN = sn
 
+						topic := fmt.Sprintf("node/%v/lora-panels/register", s.nodeId)
+
+						jsonData, err := json.Marshal(data)
+						if err != nil {
+							log.Printf("Failed to marshal converter register data: %v", err)
+							continue
+						}
+
+						err = service.DefaultMqttService.PublishMessage(topic, 0, false, jsonData)
+						if err != nil {
+							log.Printf("Failed to publish converter register message: %v", err)
+							return
+
+						}
+					}
 				}
+
+			// 0xF2 io register, 0xF3 485 register
+			case 0xF2, 0xF3:
+				if len == 8 && s.isParing {
+					s.converterRegister(frame)
+				}
+
 			}
 
 		case <-heartSendTick.C:
@@ -382,41 +336,4 @@ func (s *loraThings) Process() {
 
 		}
 	}
-}
-
-func (s *loraThings) Init() {
-
-	// load converter, devices
-	if converters, err := service.DbGetConverters(s.db, "lora"); err == nil {
-		for _, c := range converters {
-			s.addConverter(c.SN, int(c.ConverterType))
-
-			if c.Guid != nil && c.DeviceType != nil {
-				s.addLoraThing(*c.Guid, int(*c.DeviceType), c.SN, int(c.ConverterType))
-			}
-		}
-
-	}
-
-}
-
-func (s *loraThings) getThingByGuid(guid string) (model.Thing, bool) {
-
-	var result model.Thing
-	found := false
-
-	s.things.Range(func(key, value any) bool {
-		if thing, ok := value.(model.Thing); ok {
-			if thing.GetId() == guid {
-				result = thing
-				found = true
-				return false
-			}
-
-		}
-
-		return true
-	})
-
-	return result, found
 }

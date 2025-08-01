@@ -18,8 +18,14 @@ type AddrAdapter interface {
 	GetAddr() uint8
 }
 
+//	type Child interface {
+//		GetParent() Thing
+//	}
 type Parent interface {
-	GetChildren() []SparkplugDevice
+	// GetChildren() []SparkplugDevice
+	AddChild(*LightModuleChild)
+	RemoveChildren()
+	GetChildrenIds() []string
 }
 
 // type WifiDevice interface {
@@ -46,7 +52,7 @@ type IHeart interface {
 
 type Thing interface {
 	Response([]byte)
-	Request(string, interface{})
+	Request(string, any)
 	GetId() string
 	Converter
 	// ReportOnConnected()
@@ -55,5 +61,5 @@ type Thing interface {
 
 	IHeart
 
-	SparkplugDevice
+	// SparkplugDevice
 }

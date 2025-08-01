@@ -1,39 +1,44 @@
 package model
 
-import "google.golang.org/protobuf/proto"
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
+)
 
 type LightModuleChild struct {
-	guid   string
-	no     int
-	status *Payload_Metric
+	guid string
+	no   int
+	on   bool
 
 	observer Observer
+
+	parent Thing
 }
 
-func NewLightModuleChild(guid string, no int, o Observer) *LightModuleChild {
+// func (i *LightModuleChild) GetParent() Thing {
+// 	return i.parent
+// }
+
+func NewLightModuleChild(guid string, no int, o Observer, parent Thing) *LightModuleChild {
 
 	return &LightModuleChild{
 
 		guid: guid,
 		no:   no,
 
-		status: &Payload_Metric{
-			Name:      proto.String("on"),
-			Datatype:  proto.Uint32(uint32(DataType_Boolean)),
-			Timestamp: proto.Uint64(0),
-		},
-
 		observer: o,
+
+		parent: parent,
 	}
 
 }
 
 func (i *LightModuleChild) Set(new bool) {
 
-	old := i.status.GetBooleanValue()
-	i.status.Value = &Payload_Metric_BooleanValue{new}
-
-	changed := new != old
+	changed := new != i.on
 	if changed {
 		i.notifyAll()
 	}
@@ -43,21 +48,48 @@ func (i *LightModuleChild) GetId() string {
 	return i.guid
 }
 
-func (i *LightModuleChild) DBirth() *Payload {
-	p := NewPayload()
+func (i *LightModuleChild) notifyAll() {
 
-	p.Metrics = append(p.Metrics, i.status)
-
-	return p
+	state := map[string]any{
+		"on": i.on,
+	}
+	i.observer.Update(i.guid, state)
 
 }
 
-func (i *LightModuleChild) notifyAll() {
+func (i *LightModuleChild) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
-	p := NewPayload()
+	var desired struct {
+		On bool `json:"on"`
+	}
 
-	p.Metrics = append(p.Metrics, i.status)
+	err := json.Unmarshal(m.Payload(), &desired)
 
-	i.observer.Update(i.guid, p)
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal light update delta: %v", err)
+		return
+	}
 
+	if desired.On != i.on {
+		switch desired.On {
+		case true:
+			i.parent.Request("on", i.no)
+		case false:
+			i.parent.Request("off", i.no)
+
+		}
+	}
+}
+
+func (i *LightModuleChild) CommandRequest(c mqtt.Client, m mqtt.Message) {
+	var cmd CommandData
+
+	err := json.Unmarshal(m.Payload(), &cmd)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal light module child command: %v", err)
+		return
+	}
+
+	i.parent.Request(cmd.Command, fmt.Sprint(i.no))
 }

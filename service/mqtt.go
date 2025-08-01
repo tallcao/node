@@ -3,7 +3,6 @@ package service
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"edge/model"
 	"fmt"
 	"log"
 	"os"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -35,12 +33,10 @@ type MqttService struct {
 
 // InitSparkplugService initializes the default SparkplugService instance
 func InitMqttService(id, brokerURL, caFile string) error {
-	var initErr error
 	once.Do(func() {
 		DefaultMqttService = NewMqttService(id, brokerURL, caFile)
-		initErr = DefaultMqttService.Start()
 	})
-	return initErr
+	return nil
 }
 
 // GetSparkplugService returns the default SparkplugService instance
@@ -97,23 +93,33 @@ func NewMqttService(id, brokerURL, caFile string) *MqttService {
 	// 设置 OnConnect 回调
 	opts.SetOnConnectHandler(service.onConnectHandler)
 
-	ts := uint64(time.Now().UnixMicro())
-	bdSeqMetric := model.NewBdSeqMetric(0, ts)
-
-	p := &model.Payload{
-		Timestamp: proto.Uint64(ts),
-	}
-	p.Metrics = append(p.Metrics, bdSeqMetric)
-
-	topic := fmt.Sprintf("spBv1.0/devices/NDEATH/%v", id)
-
-	if payload, err := proto.Marshal(p); err == nil {
-		opts.SetBinaryWill(topic, payload, 1, false)
-	}
+	// node connect death
+	opts.SetWill(fmt.Sprintf("node/%v/connected", id), "false", 1, true)
 
 	service.client = mqtt.NewClient(opts)
 
 	return service
+}
+
+func (s *MqttService) DeleteSubscriptionTopic(topic string) {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.topics, topic)
+	if s.running && s.client.IsConnected() {
+		// 如果服务正在运行且已连接，立即取消订阅
+		token := s.client.Unsubscribe(topic)
+		token.Wait()
+		if token.Error() != nil {
+			log.Printf("ERROR: Failed to unsubscribe from topic '%s': %v\n", topic, token.Error())
+		} else {
+			log.Printf("Unsubscribed from topic: '%s'\n", topic)
+		}
+	}
+
+	delete(s.handlers, topic)
+
 }
 
 // 这个方法可以在服务启动前或运行中调用
@@ -121,7 +127,9 @@ func (s *MqttService) AddSubscriptionTopic(topic string, qos byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.topics[topic] = qos
+
 	if s.running && s.client.IsConnected() {
+
 		// 如果服务正在运行且已连接，立即订阅
 		s.subscribeToTopic(topic, qos)
 	}
@@ -133,28 +141,19 @@ func (s *MqttService) AddTopicHandler(topic string, handler mqtt.MessageHandler)
 	defer s.mu.Unlock()
 	s.handlers[topic] = handler
 }
-
-// AddConnectHandler adds a new connect handler to the service
 func (s *MqttService) AddConnectHandler(handler mqtt.OnConnectHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onConnectHandlers = append(s.onConnectHandlers, handler)
 }
 
-// ClearConnectHandlers removes all connect handlers
-func (s *MqttService) ClearConnectHandlers() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.onConnectHandlers = nil
-}
-
 // subscribeToTopic 内部函数，执行单个主题的订阅
 func (s *MqttService) subscribeToTopic(topic string, qos byte) {
-	var handler mqtt.MessageHandler
-	if h, exists := s.handlers[topic]; exists {
-		handler = h
-	} else {
-		handler = s.defaultMessageHandler()
+
+	handler, exists := s.handlers[topic]
+	if !exists {
+		log.Printf("ERROR: No handler registered for topic '%s'\n", topic)
+		return
 	}
 
 	token := s.client.Subscribe(topic, qos, handler)
@@ -164,6 +163,7 @@ func (s *MqttService) subscribeToTopic(topic string, qos byte) {
 	} else {
 		log.Printf("Subscribed to topic: '%s' (QoS %d)\n", topic, qos)
 	}
+
 }
 
 // onConnectHandler 是 MQTT 客户端连接成功时的回调
@@ -180,7 +180,6 @@ func (s *MqttService) onConnectHandler(client mqtt.Client) {
 			handler(client)
 		}
 	}
-
 	// Handle topic subscriptions
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -193,16 +192,11 @@ func (s *MqttService) onConnectHandler(client mqtt.Client) {
 	} else {
 		log.Println("No topics registered for subscription.")
 	}
-}
 
-// defaultMessageHandler 是所有订阅消息的默认处理器
-func (s *MqttService) defaultMessageHandler() mqtt.MessageHandler {
-	return func(client mqtt.Client, msg mqtt.Message) {
-		fmt.Printf("Received message from topic: %s, Payload: %s\n", msg.Topic(), msg.Payload())
-	}
 }
 
 func (s *MqttService) Start() error {
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.running {
@@ -229,7 +223,7 @@ func (s *MqttService) Stop() {
 	log.Println("MQTT Client Service stopped.")
 }
 
-func (s *MqttService) PublishMessage(topic string, qos byte, retained bool, payload interface{}) error {
+func (s *MqttService) PublishMessage(topic string, qos byte, retained bool, payload any) error {
 	if !s.client.IsConnected() {
 		return fmt.Errorf("MQTT client not connected, cannot publish")
 	}

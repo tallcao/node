@@ -4,17 +4,15 @@ import (
 	"edge/utils"
 	"encoding/json"
 	"log"
-	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"google.golang.org/protobuf/proto"
 )
 
 type MotorFR struct {
 
 	// 0:stop, 1: open, 2: close
 
-	status *Payload_Metric
+	status uint8
 
 	guid string
 
@@ -29,11 +27,6 @@ type MotorFR struct {
 func NewMotorFR(guid string, c Converter, o Observer) *MotorFR {
 
 	item := &MotorFR{
-		status: &Payload_Metric{
-			Name:      proto.String("status"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt8)),
-			Timestamp: proto.Uint64(0),
-		},
 
 		guid:      guid,
 		Converter: c,
@@ -86,37 +79,32 @@ func (i *MotorFR) Response(data []byte) {
 
 	n := len(data)
 	if n == 0 {
-
 		return
 	}
 
-	status := i.status.GetIntValue()
+	status := i.status
 
 	if n == 8 {
 
 		if data[1] == 0x06 {
 			switch data[5] {
 			case 0x01:
-				status = 1
+				i.status = 1
 			case 0x02:
-				status = 2
+				i.status = 2
 			case 0x00:
-				status = 0
+				i.status = 0
 
 			}
 
-			changed := (status != i.status.GetIntValue())
-
-			i.status.Value = &Payload_Metric_IntValue{status}
-			*i.status.Timestamp = uint64(time.Now().UnixMicro())
-
-			if changed {
-				i.notifyAll()
-
-			}
 		}
 	}
 
+	changed := (status != i.status)
+
+	if changed {
+		i.notifyAll()
+	}
 }
 
 func (i *MotorFR) GetId() string {
@@ -127,10 +115,11 @@ func (i *MotorFR) GetType() DEVICE_TYPE {
 }
 
 func (i *MotorFR) notifyAll() {
-	p := NewPayload()
-	p.Metrics = append(p.Metrics, i.status)
 
-	i.observer.Update(i.guid, p)
+	state := map[string]interface{}{
+		"status": i.status,
+	}
+	i.observer.Update(i.guid, state)
 
 }
 
@@ -138,33 +127,22 @@ func (i *MotorFR) GetDevice485Setting() (uint32, byte, byte, byte) {
 	return 9600, 0, 8, 1
 }
 
-func (i *MotorFR) DBirth() *Payload {
-	p := NewPayload()
-
-	p.Metrics = append(p.Metrics, i.status)
-
-	return p
-
-}
-
 func (i *MotorFR) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
-	var update struct {
-		Status uint32 `json:"status"`
+	var desired struct {
+		Status uint8 `json:"status"`
 	}
 
-	err := json.Unmarshal(m.Payload(), &update)
+	err := json.Unmarshal(m.Payload(), &desired)
 
 	if err != nil {
 		log.Printf("ERROR: Failed to unmarshal e-valve update delta: %v", err)
 		return
 	}
 
-	currentState := i.status.GetIntValue()
+	if desired.Status != i.status {
 
-	if update.Status != currentState {
-
-		data := []byte{i.addr, 0x06, 0x00, 0x00, 0x00, byte(update.Status)}
+		data := []byte{i.addr, 0x06, 0x00, 0x00, 0x00, byte(desired.Status)}
 
 		crc, err := utils.CRC16(data)
 		if err != nil {
@@ -174,4 +152,17 @@ func (i *MotorFR) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 		data = append(data, crc...)
 		i.SendFrame(data)
 	}
+}
+
+func (i *MotorFR) CommandRequest(c mqtt.Client, m mqtt.Message) {
+	var cmd CommandData
+
+	err := json.Unmarshal(m.Payload(), &cmd)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal motor-fr command: %v", err)
+		return
+	}
+
+	i.Request(cmd.Command, cmd.Data)
 }

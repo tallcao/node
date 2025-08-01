@@ -1,13 +1,7 @@
 package model
 
-import (
-	"time"
-
-	"google.golang.org/protobuf/proto"
-)
-
 type LoraPanel struct {
-	action *Payload_Metric
+	action string
 
 	guid string
 
@@ -21,11 +15,6 @@ type LoraPanel struct {
 func NewLoraPanel(guid string, c Converter, o Observer) *LoraPanel {
 
 	item := &LoraPanel{
-		action: &Payload_Metric{
-			Name:      proto.String("action"),
-			Datatype:  proto.Uint32(uint32(DataType_String)),
-			Timestamp: proto.Uint64(0),
-		},
 
 		guid: guid,
 
@@ -58,8 +47,7 @@ func (i *LoraPanel) Response(data []byte) {
 		v = "3"
 	}
 
-	i.action.Value = &Payload_Metric_StringValue{v}
-	*i.action.Timestamp = uint64(time.Now().UnixMicro())
+	i.action = v
 
 	i.notifyAll()
 
@@ -75,19 +63,11 @@ func (i *LoraPanel) GetType() DEVICE_TYPE {
 
 func (i *LoraPanel) notifyAll() {
 
-	p := NewPayload()
-	p.Metrics = append(p.Metrics, i.action)
+	state := map[string]interface{}{
+		"action": i.action,
+	}
 
-	i.observer.Update(i.guid, p)
-
-}
-
-func (i *LoraPanel) DBirth() *Payload {
-	p := NewPayload()
-
-	p.Metrics = append(p.Metrics, i.action)
-
-	return p
+	i.observer.Update(i.guid, state)
 
 }
 

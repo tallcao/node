@@ -2,15 +2,15 @@ package model
 
 import (
 	"edge/utils"
-	"fmt"
+	"encoding/json"
+	"log"
 	"strconv"
-	"time"
 
-	"google.golang.org/protobuf/proto"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 type LightModule16 struct {
-	status *Payload_Metric
+	status uint16
 
 	addr byte
 
@@ -26,18 +26,9 @@ type LightModule16 struct {
 	children []*LightModuleChild
 }
 
-// type childData struct {
-// 	Data int `json:"data"`
-// }
-
 func NewLightModule16(guid string, c Converter, o Observer) *LightModule16 {
 
 	item := &LightModule16{
-		status: &Payload_Metric{
-			Name:      proto.String("status"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt16)),
-			Timestamp: proto.Uint64(0),
-		},
 
 		guid: guid,
 
@@ -47,13 +38,6 @@ func NewLightModule16(guid string, c Converter, o Observer) *LightModule16 {
 
 		observer: o,
 		children: make([]*LightModuleChild, 16),
-	}
-
-	for i := 0; i < 16; i++ {
-
-		id := fmt.Sprintf("%v-%v", guid, i)
-		child := NewLightModuleChild(id, i, o)
-		item.children[i] = child
 	}
 
 	if adapter, ok := c.(AddrAdapter); ok {
@@ -96,11 +80,11 @@ func (d *LightModule16) Request(command string, params interface{}) {
 			cmd = 0x02
 		}
 
-		status := d.status.GetIntValue()
+		status := d.status
 		if command == "toggle" {
 			cmd = 0x00
 			mask := 1 << i
-			if (status & uint32(mask)) == 0 {
+			if (status & uint16(mask)) == 0 {
 				cmd = 0x02
 			}
 		}
@@ -144,15 +128,13 @@ func (d *LightModule16) Response(data []byte) {
 
 	cmd := data[1]
 
-	*d.status.Timestamp = uint64(time.Now().UnixMicro())
-
-	old := d.status.GetIntValue()
+	old := d.status
 
 	// full open, full close
 	if cmd == 0x10 {
 		// full open
 		if d.code == 3 {
-			d.status.Value = &Payload_Metric_IntValue{0xFFFF}
+			d.status = 0xFFFF
 
 			for _, child := range d.children {
 				child.Set(true)
@@ -161,7 +143,7 @@ func (d *LightModule16) Response(data []byte) {
 		// full close
 		if d.code == 4 {
 
-			d.status.Value = &Payload_Metric_IntValue{0}
+			d.status = 0x0000
 
 			for _, child := range d.children {
 				child.Set(false)
@@ -182,24 +164,24 @@ func (d *LightModule16) Response(data []byte) {
 		switch data[3] {
 		case 0x04:
 			v := (1 << no) | old
-			d.status.Value = &Payload_Metric_IntValue{v}
+			d.status = v
 
 			d.children[no].Set(true)
 		case 0x02:
 			v := (0xFFFF - 1<<no) & old
-			d.status.Value = &Payload_Metric_IntValue{v}
+			d.status = v
 
 			d.children[no].Set(false)
 
 		case 0x05:
 			v := (1 << (no + 8)) | old
-			d.status.Value = &Payload_Metric_IntValue{v}
+			d.status = v
 
 			d.children[no+8].Set(true)
 
 		case 0x03:
 			v := (0xFFFF - 1<<(no+8)) & old
-			d.status.Value = &Payload_Metric_IntValue{v}
+			d.status = v
 
 			d.children[no+8].Set(false)
 		}
@@ -212,7 +194,7 @@ func (d *LightModule16) Response(data []byte) {
 		// route 1-8
 		v := data[4]
 
-		statusValue := uint32(0)
+		statusValue := uint16(0)
 
 		for i := 0; i < 8; i++ {
 
@@ -242,13 +224,13 @@ func (d *LightModule16) Response(data []byte) {
 
 		}
 
-		d.status.Value = &Payload_Metric_IntValue{statusValue}
+		d.status = statusValue
 
 	}
 
-	new := d.status.GetIntValue()
+	changed := (old != d.status)
 
-	if new != old {
+	if changed {
 		d.notifyAll()
 	}
 
@@ -263,14 +245,34 @@ func (i *LightModule16) GetType() DEVICE_TYPE {
 
 func (i *LightModule16) notifyAll() {
 
-	p := NewPayload()
+	status := []bool{
+		i.status&0x0001 == 0x0001,
+		i.status&0x0002 == 0x0002,
+		i.status&0x0004 == 0x0004,
+		i.status&0x0008 == 0x0008,
+		i.status&0x0010 == 0x0010,
+		i.status&0x0020 == 0x0020,
+		i.status&0x0040 == 0x0040,
+		i.status&0x0080 == 0x0080,
+		i.status&0x0100 == 0x0100,
+		i.status&0x0200 == 0x0200,
+		i.status&0x0400 == 0x0400,
+		i.status&0x0800 == 0x0800,
+		i.status&0x1000 == 0x1000,
+		i.status&0x2000 == 0x2000,
+		i.status&0x4000 == 0x4000,
+		i.status&0x8000 == 0x8000,
+	}
 
-	p.Metrics = append(p.Metrics, i.status)
+	state := map[string]interface{}{
+		"status": status,
+	}
 
-	i.observer.Update(i.guid, p)
+	i.observer.Update(i.guid, state)
 
 }
 
+// todo 8-16 route
 func lightingModuleRouteNo(v byte) int {
 
 	for i := 0; i < 8; i++ {
@@ -290,11 +292,42 @@ func (i *LightModule16) HeartCheck() {
 	}
 }
 
-func (i *LightModule16) DBirth() *Payload {
-	p := NewPayload()
+func (d *LightModule16) AddChild(child *LightModuleChild) {
 
-	p.Metrics = append(p.Metrics, i.status)
+	if child.no >= 0 && child.no < 16 {
+		d.children[child.no] = child
 
-	return p
+	}
 
+}
+
+func (i *LightModule16) GetChildrenIds() []string {
+
+	result := make([]string, 0)
+	for _, child := range i.children {
+		result = append(result, child.GetId())
+	}
+
+	return result
+}
+
+func (i *LightModule16) RemoveChildren() {
+	for _, child := range i.children {
+		child.parent = nil
+	}
+
+	i.children = make([]*LightModuleChild, 0)
+}
+
+func (i *LightModule16) CommandRequest(c mqtt.Client, m mqtt.Message) {
+	var cmd CommandData
+
+	err := json.Unmarshal(m.Payload(), &cmd)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal light module-16 command: %v", err)
+		return
+	}
+
+	i.Request(cmd.Command, cmd.Data)
 }

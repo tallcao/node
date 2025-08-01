@@ -2,7 +2,7 @@ package model
 
 type MqttMsg struct {
 	Topic    string
-	Payload  []byte
+	Payload  any
 	Qos      byte
 	Retained bool
 }

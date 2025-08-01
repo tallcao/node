@@ -12,15 +12,15 @@ const (
 )
 
 func IPv4() string {
-	addresses, err := net.InterfaceAddrs()
+	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return ""
 	}
 
-	for _, addr := range addresses {
+	for _, addr := range addrs {
 		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
 			if ipnet.IP.To4() != nil {
-				return ipnet.IP.To4().String()
+				return ipnet.IP.String()
 			}
 		}
 	}

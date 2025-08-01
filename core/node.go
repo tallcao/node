@@ -1,18 +1,18 @@
 package core
 
 import (
-	"database/sql"
 	"edge/model"
 	"edge/service"
 	"edge/system"
-	"edge/utils"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"google.golang.org/protobuf/proto"
 )
 
 type nodeConfig struct {
@@ -22,11 +22,20 @@ type nodeConfig struct {
 	Dbfile string `json:"dbfile"`
 }
 
+type syncDevices struct {
+	mu      sync.Mutex
+	version int64
+	// uuid: bool
+	devices map[string]bool
+}
+
 type Node struct {
 	id string
 
+	uuid string
+
 	// sparkplug
-	primaryHostAppOnline bool
+	// primaryHostAppOnline bool
 
 	loraThings   *loraThings
 	canThings    *canThings
@@ -34,11 +43,12 @@ type Node struct {
 
 	// sparkService *service.SparkplugService
 
-	dataChan chan *model.SpMessage
+	// dataChan chan *model.SpMessage
 
-	seq byte
+	mqtt        *service.MqttService
+	mqttPubChan chan *model.MqttMsg
 
-	db *sql.DB
+	syncDevices
 }
 
 func NewNode(file string, dbus *service.DbusService) *Node {
@@ -59,351 +69,152 @@ func NewNode(file string, dbus *service.DbusService) *Node {
 	ca := config.Cafile
 	uri := config.Broker
 
-	ch := make(chan *model.SpMessage)
-
-	db, err := sql.Open("sqlite3", config.Dbfile)
-
-	if err != nil {
-		return nil
-	}
+	ch := make(chan *model.MqttMsg, 100)
 
 	service.InitMqttService(id, uri, ca)
 	return &Node{
 
 		id: id,
 
-		seq: getSeq(),
+		canThings:    NewCanThings(dbus.CanConnection(), ch, id),
+		loraThings:   NewLoraThings(dbus.LoraConnection(), ch, id),
+		serialThings: NewSerialThings(dbus.SerialConnection(), ch, id),
 
-		canThings:    NewCanThings(dbus.CanConnection(), ch, id, db),
-		loraThings:   NewLoraThings(dbus.LoraConnection(), ch, id, db),
-		serialThings: NewSerialThings(dbus.SerialConnection(), ch, id, db),
+		mqttPubChan: ch,
+		mqtt:        service.GetMqttService(),
 
-		// sparkService: service.NewSparkplugService(id, ca, uri),
-
-		dataChan: ch,
-
-		db: db,
+		syncDevices: syncDevices{
+			devices: make(map[string]bool),
+		},
 	}
 
 }
 
-func (n *Node) Init() {
+func (n *Node) devicesUpdateCallback(c mqtt.Client, m mqtt.Message) {
 
-	n.loraThings.Init()
-	n.canThings.Init()
-	n.serialThings.Init()
-	// n.sparkService.SetOnConn(n.onConnectHandler)
-
-}
-
-func (n *Node) stateCallback(c mqtt.Client, m mqtt.Message) {
-
-	state := model.SpSTATE{}
-	err := json.Unmarshal(m.Payload(), &state)
+	var update model.DevicesUpdate
+	err := json.Unmarshal(m.Payload(), &update)
 	if err != nil {
+		log.Printf("Failed to unmarshal devices update: %v", err)
 		return
 	}
 
-	n.primaryHostAppOnline = state.Online
+	n.mu.Lock()
+	defer n.mu.Unlock()
 
-}
-
-// todo
-func getSeq() byte {
-
-	return 0
-}
-
-func (n *Node) createDevice(p *model.Payload) {
-	commandID := ""
-
-	data := &model.CommandCreateDevice{}
-
-	for _, m := range p.GetMetrics() {
-
-		if m.GetName() == "Command ID" {
-			commandID = m.GetStringValue()
-			continue
-		}
-
-		if m.GetName() == "Node Control/Create Device" {
-
-			v := m.GetBytesValue()
-
-			err := json.Unmarshal(v, &data)
-
-			if err != nil {
-				return
-			}
-
-			continue
-		}
-
-	}
-
-	if commandID == "" || data == nil {
+	if update.Version <= n.version {
+		log.Printf("Ignoring outdated devices update: %d <= %d", update.Version, n.version)
 		return
 	}
+	n.version = update.Version
 
-	thingType := model.DEVICE_TYPE(data.DeviceType)
-	guid := data.DeviceGUID
+	for _, device := range update.Devices {
 
-	var response *model.CommandResponse
-
-	switch data.Connection {
-	case "can":
-		response = n.canThings.Create(guid, thingType, data.ConverterSN)
-	case "serial":
-		response = n.serialThings.Create(guid, thingType, uint8(data.Addr))
-	case "lora":
-		response = n.loraThings.Create(guid, thingType, data.ConverterSN)
-	default:
-		return
-	}
-	response.Timestamp = uint64(time.Now().UnixMicro())
-	response.CommandID = commandID
-
-	if payload, err := response.ToPayload(); err == nil {
-		msg := &model.SpMessage{
-			Topic:   fmt.Sprintf("spBv1.0/devices/NDATA/%v", n.id),
-			Payload: payload,
+		if device.Operation == "add" {
+			n.devices[device.UUID] = true
+		} else {
+			delete(n.devices, device.UUID)
 		}
 
-		n.dataChan <- msg
-
-	}
-
-}
-
-func (n *Node) loraPairing(p *model.Payload) {
-
-	commandID := ""
-
-	duration := 0
-
-	for _, m := range p.GetMetrics() {
-
-		if m.GetName() == "Command ID" {
-			commandID = m.GetStringValue()
-			continue
-		}
-
-		if m.GetName() == "Node Control/Lora Pairing" {
-
-			duration = int(m.GetIntValue())
-
-			continue
-		}
-
-	}
-
-	if commandID == "" || duration == 0 {
-		return
-	}
-
-	go n.loraThings.Paring(duration)
-
-	response := &model.CommandResponse{
-		CommandID: commandID,
-		Code:      200,
-		Timestamp: uint64(time.Now().UnixMicro()),
-	}
-
-	if payload, err := response.ToPayload(); err == nil {
-		msg := &model.SpMessage{
-			Topic:   fmt.Sprintf("spBv1.0/devices/NDATA/%v", n.id),
-			Payload: payload,
-		}
-
-		n.dataChan <- msg
-
-	}
-
-}
-
-func (n *Node) deleteDevice(p *model.Payload) {
-
-	guid := ""
-	for _, m := range p.Metrics {
-		if m.GetName() == "device id" {
-			guid = m.GetStringValue()
-			break
+		connectionType := strings.ToLower(device.ConnectionType)
+		switch connectionType {
+		case model.ConnectionTypeCAN:
+			n.canThings.UpdateDevice(device)
+		case model.ConnectionTypeLora:
+			n.loraThings.UpdateDevice(device)
+		case model.ConnectionTypeSerial:
+			n.serialThings.UpdateDevice(device)
+		default:
+			log.Printf("Unknown device converter type: %v", device.ConverterType)
 		}
 	}
-
-	go n.canThings.Delete(guid)
-	go n.serialThings.Delete(guid)
-	go n.loraThings.Delete(guid)
 }
+func (n *Node) converterRegisterCallback(c mqtt.Client, m mqtt.Message) {
 
-func newRebirthMetric(ts uint64) *model.Payload_Metric {
-	metric := &model.Payload_Metric{
-		Name:      proto.String("Node Control/Rebirth"),
-		Datatype:  proto.Uint32(uint32(model.DataType_Boolean)),
-		Value:     &model.Payload_Metric_BooleanValue{BooleanValue: false},
-		Timestamp: proto.Uint64(ts),
+	var result struct {
+		// Node          string `json:"node"`
+		SN            string `json:"sn"`
+		ConverterType int    `json:"converter_type"`
+		CanID         int    `json:"can_id,omitempty"`
 	}
 
-	return metric
-}
-
-func newRebootMetric(ts uint64) *model.Payload_Metric {
-	metric := &model.Payload_Metric{
-		Name:      proto.String("Node Control/Reboot"),
-		Datatype:  proto.Uint32(uint32(model.DataType_Boolean)),
-		Value:     &model.Payload_Metric_BooleanValue{BooleanValue: false},
-		Timestamp: proto.Uint64(ts),
-	}
-
-	return metric
-}
-
-func newPropertiesMetrics(ts uint64) []*model.Payload_Metric {
-
-	var metrics []*model.Payload_Metric
-
-	ip := &model.Payload_Metric{
-		Name:      proto.String("Properties/IPv4"),
-		Datatype:  proto.Uint32(uint32(model.DataType_String)),
-		Value:     &model.Payload_Metric_StringValue{StringValue: system.IPv4()},
-		Timestamp: proto.Uint64(ts),
-	}
-
-	version := &model.Payload_Metric{
-		Name:      proto.String("Properties/Node Version"),
-		Datatype:  proto.Uint32(uint32(model.DataType_String)),
-		Value:     &model.Payload_Metric_StringValue{StringValue: system.NodeVersion()},
-		Timestamp: proto.Uint64(ts),
-	}
-
-	metrics = append(metrics, ip, version)
-
-	return metrics
-}
-
-func (n *Node) nbirth() *model.Payload {
-
-	ts := uint64(time.Now().UnixMicro())
-
-	// bdSeq := n.sparkService.GetBdSeq()
-	bdSeq := byte(0)
-	bdSeqMetric := model.NewBdSeqMetric(bdSeq, ts)
-	rebirthMetric := newRebirthMetric(ts)
-
-	properties := newPropertiesMetrics(ts)
-
-	p := model.NewPayload()
-
-	p.Metrics = append(p.Metrics, bdSeqMetric, rebirthMetric)
-	p.Metrics = append(p.Metrics, properties...)
-
-	return p
-
-}
-
-func (n Node) onConnectHandler(c mqtt.Client) {
-
-	// primary host app STATE
-	c.Subscribe("spBv1.0/STATE/+", 0, n.stateCallback)
-
-	// NCMD
-	c.Subscribe(fmt.Sprintf("spBv1.0/devices/NCMD/%v", n.id), 0, n.nodeCommandCallback)
-
-	// DCMD
-	c.Subscribe(fmt.Sprintf("spBv1.0/devices/DCMD/%v/+", n.id), 0, n.deviceCommandCallback)
-
-	// lora
-	c.Subscribe(fmt.Sprintf("spBv1.0/lora/DBIRTH/%v/+", n.id), 0, n.loraBirthCallback)
-
-	// NBIRTH
-	msg := &model.SpMessage{
-		Topic:    fmt.Sprintf("spBv1.0/devices/NBIRTH/%v", n.id),
-		Payload:  n.nbirth(),
-		Retained: true,
-	}
-
-	n.dataChan <- msg
-
-}
-
-// NCMD
-func (n *Node) nodeCommandCallback(c mqtt.Client, m mqtt.Message) {
-
-	if !n.primaryHostAppOnline {
-		return
-	}
-
-	p := &model.Payload{}
-	err := proto.Unmarshal(m.Payload(), p)
-
+	err := json.Unmarshal(m.Payload(), &result)
 	if err != nil {
+		log.Printf("Failed to unmarshal converter register result: %v", err)
 		return
 	}
 
-	for _, m := range p.GetMetrics() {
-
-		switch m.GetName() {
-		case "Node Control/Rebirth":
-			n.rebirth()
-		case "Node Control/Reboot":
-			n.reboot()
-		case "Node Control/Create Device":
-			n.createDevice(p)
-		case "Node Control/Delete Device":
-			n.deleteDevice(p)
-		case "Node Control/Lora Pairing":
-			n.loraPairing(p)
-		}
+	switch result.ConverterType {
+	case 1, 2, 3: // can-io, can-485, can-relay
+		n.canThings.RegisterResult(result.SN, result.CanID)
+	case 0, 4, 5, 6: //lora-panel, lora-io, lora-485, lora-relay
+		n.loraThings.RegisterResult(result.SN)
 
 	}
 }
 
-// DCMD
-func (n *Node) deviceCommandCallback(c mqtt.Client, m mqtt.Message) {
-	if !n.primaryHostAppOnline {
-		return
-	}
+func (n *Node) getUUIDCallback(c mqtt.Client, m mqtt.Message) {
 
-	guid := utils.GetTopicN(m.Topic(), 4)
+	n.uuid = string(m.Payload())
 
-	go n.canThings.Request(guid, m.Payload())
-	go n.loraThings.Request(guid, m.Payload())
-	go n.serialThings.Request(guid, m.Payload())
+	n.publishDevices()
 
+	topic := fmt.Sprintf("node/%v/lora/permit-join", n.uuid)
+	n.mqtt.AddTopicHandler(topic, n.loraThings.PermitJoinCallback)
+	n.mqtt.AddSubscriptionTopic(topic, 1)
+
+	topic = fmt.Sprintf("node/%v/devices/update", n.uuid)
+	n.mqtt.AddTopicHandler(topic, n.devicesUpdateCallback)
+	n.mqtt.AddSubscriptionTopic(topic, 1)
+
+	topic = fmt.Sprintf("node/%v/converters/register/result", n.uuid)
+	n.mqtt.AddTopicHandler(topic, n.converterRegisterCallback)
+	n.mqtt.AddSubscriptionTopic(topic, 1)
 }
 
-func (n *Node) loraBirthCallback(c mqtt.Client, m mqtt.Message) {
-	if !n.primaryHostAppOnline {
-		return
+func (n *Node) onConnectHandler(c mqtt.Client) {
+	n.mqtt.PublishMessage(fmt.Sprintf("node/%v/sn", n.id), 1, true, n.id)
+
+	n.mqtt.PublishMessage(fmt.Sprintf("node/%v/connected", n.id), 1, true, "true")
+
+	var info struct {
+		IP      string `json:"ip"`
+		SN      string `json:"sn"`
+		Version string `json:"version"`
 	}
 
-	sn := utils.GetTopicN(m.Topic(), 4)
-	guid := ""
-	deviceType := 0
-	converterType := 0
-
-	p := &model.Payload{}
-	err := proto.Unmarshal(m.Payload(), p)
-
+	info.IP = system.IPv4()
+	info.SN = n.id
+	info.Version = system.NodeVersion()
+	infoJSON, err := json.Marshal(info)
 	if err != nil {
+		log.Printf("ERROR: Failed to marshal node info: %v", err)
+	} else {
+		n.mqtt.PublishMessage(fmt.Sprintf("node/%v/info", n.id), 1, true, infoJSON)
+	}
+
+}
+
+func (n *Node) publishDevices() {
+
+	if n.uuid == "" {
 		return
 	}
+	devices := make([]string, len(n.devices))
+	n.mu.Lock()
 
-	for _, metric := range p.GetMetrics() {
-
-		switch metric.GetName() {
-		case "guid":
-			guid = metric.GetStringValue()
-		case "device type":
-			deviceType = int(metric.GetIntValue())
-		case "converter type":
-			converterType = int(metric.GetIntValue())
-		}
-
+	for uuid := range n.devices {
+		devices = append(devices, uuid)
 	}
 
-	n.loraThings.addLoraThing(guid, deviceType, sn, converterType)
+	n.mu.Unlock()
 
+	devicesJSON, err := json.Marshal(devices)
+	if err != nil {
+		log.Printf("ERROR: Failed to marshal devices: %v", err)
+		return
+	}
+	n.mqtt.PublishMessage(fmt.Sprintf("node/%v/devices", n.uuid), 1, false, devicesJSON)
 }
 
 func (n *Node) Run() {
@@ -412,32 +223,25 @@ func (n *Node) Run() {
 	go n.loraThings.Process()
 	go n.serialThings.Process()
 
+	n.mqtt.AddConnectHandler(n.onConnectHandler)
+
+	topic := fmt.Sprintf("node/%v/uuid", n.id)
+	n.mqtt.AddTopicHandler(topic, n.getUUIDCallback)
+	n.mqtt.AddSubscriptionTopic(topic, 1)
+
 	go service.GetMqttService().Start()
-
 	defer service.GetMqttService().Stop()
-	service.GetMqttService().AddConnectHandler(n.onConnectHandler)
-	// go n.sparkService.Run()
 
-	defer n.db.Close()
-	for msg := range n.dataChan {
-		msg.Payload.Timestamp = proto.Uint64(uint64(time.Now().UnixMicro()))
-		msg.Payload.Seq = proto.Uint64(uint64(n.seq))
+	syncTick := time.NewTicker(24 * time.Hour)
 
-		if payload, err := proto.Marshal(msg.Payload); err == nil {
-			service.GetMqttService().PublishMessage(msg.Topic, msg.Qos, msg.Retained, payload)
-			// n.sparkService.Publish(msg.Topic, msg.Qos, msg.Retained, payload)
+	for {
+		select {
+		case <-syncTick.C:
+			n.publishDevices()
+
+		case msg := <-n.mqttPubChan:
+			n.mqtt.PublishMessage(msg.Topic, msg.Qos, msg.Retained, msg.Payload)
 		}
 	}
-}
 
-// todo
-func (n *Node) rebirth() {
-
-	// NBIRTH
-
-	// DBIRTH
-}
-
-// todo
-func (n *Node) reboot() {
 }

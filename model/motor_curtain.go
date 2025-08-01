@@ -4,14 +4,12 @@ import (
 	"edge/utils"
 	"encoding/json"
 	"log"
-	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"google.golang.org/protobuf/proto"
 )
 
 type MotorCurtain struct {
-	percent *Payload_Metric
+	percent uint8
 
 	guid string
 
@@ -26,11 +24,6 @@ type MotorCurtain struct {
 func NewMotorCurtain(guid string, c Converter, o Observer) *MotorCurtain {
 
 	item := &MotorCurtain{
-		percent: &Payload_Metric{
-			Name:      proto.String("percent"),
-			Datatype:  proto.Uint32(uint32(DataType_UInt8)),
-			Timestamp: proto.Uint64(0),
-		},
 
 		guid:      guid,
 		Converter: c,
@@ -91,18 +84,18 @@ func (i *MotorCurtain) Response(data []byte) {
 		return
 	}
 
+	old := i.percent
 	if data[3] == 0x01 && data[4] == 0x10 {
 
 		percent := data[5]
-		ts := uint64(time.Now().UnixMicro())
 
-		i.percent.Value = &Payload_Metric_IntValue{uint32(percent)}
-		*i.percent.Timestamp = ts
-
+		i.percent = percent
 	}
 
-	i.notifyAll()
-
+	change := (old != i.percent)
+	if change {
+		i.notifyAll()
+	}
 }
 
 func (i *MotorCurtain) GetId() string {
@@ -113,10 +106,10 @@ func (i *MotorCurtain) GetType() DEVICE_TYPE {
 }
 
 func (i *MotorCurtain) notifyAll() {
-
-	p := NewPayload()
-	p.Metrics = append(p.Metrics, i.percent)
-	i.observer.Update(i.guid, p)
+	state := map[string]interface{}{
+		"percent": i.percent,
+	}
+	i.observer.Update(i.guid, state)
 }
 
 func (i *MotorCurtain) GetDevice485Setting() (uint32, byte, byte, byte) {
@@ -130,36 +123,26 @@ func (i *MotorCurtain) HeartCheck() {
 	}
 }
 
-func (i *MotorCurtain) DBirth() *Payload {
-	p := NewPayload()
-
-	p.Metrics = append(p.Metrics, i.percent)
-
-	return p
-
-}
-
 func (i *MotorCurtain) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
-	var update struct {
-		Percent uint32 `json:"percent"`
+	var desired struct {
+		Percent uint8 `json:"percent"`
 	}
 
-	err := json.Unmarshal(m.Payload(), &update)
+	err := json.Unmarshal(m.Payload(), &desired)
 
 	if err != nil {
 		log.Printf("ERROR: Failed to unmarshal motor curtain update delta: %v", err)
 		return
 	}
 
-	currentPercent := i.percent.GetIntValue()
-	if update.Percent > 100 {
-		log.Printf("ERROR: Invalid percent value %d for motor curtain %s", update.Percent, i.guid)
+	if desired.Percent > 100 {
+		log.Printf("ERROR: Invalid percent value %d for motor curtain %s", desired.Percent, i.guid)
 		return
 	}
-	if update.Percent != currentPercent {
+	if desired.Percent != i.percent {
 
-		data := []byte{i.addr, 0xFE, 0xFE, 0x03, 0x04, byte(update.Percent)}
+		data := []byte{i.addr, 0xFE, 0xFE, 0x03, 0x04, byte(desired.Percent)}
 		crc, err := utils.CRC16(data)
 		if err != nil {
 			log.Printf("ERROR: Failed to calculate CRC16 for motor curtain %s: %v", i.guid, err)
@@ -168,4 +151,17 @@ func (i *MotorCurtain) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 		data = append(data, crc...)
 		i.SendFrame(data)
 	}
+}
+
+func (i *MotorCurtain) CommandRequest(c mqtt.Client, m mqtt.Message) {
+	var cmd CommandData
+
+	err := json.Unmarshal(m.Payload(), &cmd)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal motor curtain command: %v", err)
+		return
+	}
+
+	i.Request(cmd.Command, cmd.Data)
 }
