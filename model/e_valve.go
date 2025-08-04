@@ -111,6 +111,26 @@ func (i *EValve) HeartCheck() {
 	}
 }
 
+func (i *EValve) GetAccepted(c mqtt.Client, m mqtt.Message) {
+	var desired struct {
+		On bool `json:"on"`
+	}
+
+	err := json.Unmarshal(m.Payload(), &desired)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal e-valve update delta: %v", err)
+		return
+	}
+
+	switch desired.On {
+	case true:
+		i.SendFrame([]byte{0x01})
+	case false:
+		i.SendFrame([]byte{0x00})
+	}
+
+}
 func (i *EValve) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
 	var desired struct {

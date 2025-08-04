@@ -11,7 +11,7 @@ import (
 )
 
 type serialThings struct {
-	nodeId string
+	nodeID string
 
 	mu     sync.Mutex
 	things map[byte]model.Thing
@@ -21,6 +21,10 @@ type serialThings struct {
 	pubChan chan<- *model.MqttMsg
 
 	view model.Observer
+}
+
+func (s *serialThings) SetNodeUUID(uuid string) {
+	s.nodeID = uuid
 }
 
 func (s *serialThings) UpdateDevice(device model.Device) {
@@ -36,7 +40,7 @@ func (s *serialThings) UpdateDevice(device model.Device) {
 
 func NewSerialThings(conn model.Connection, ch chan<- *model.MqttMsg, nodeId string) *serialThings {
 	return &serialThings{
-		nodeId: nodeId,
+		nodeID: nodeId,
 
 		things:     make(map[uint8]model.Thing),
 		connection: conn,
@@ -65,6 +69,10 @@ func (s *serialThings) add(device model.Device) error {
 
 			topic := fmt.Sprintf("%v/shadow/update/delta", child.UUID)
 			service.GetMqttService().AddTopicHandler(topic, deviceChild.UpdateDelta)
+			service.GetMqttService().AddSubscriptionTopic(topic, 1)
+
+			topic = fmt.Sprintf("%v/shadow/get/accepted", child.UUID)
+			service.GetMqttService().AddTopicHandler(topic, deviceChild.GetAccepted)
 			service.GetMqttService().AddSubscriptionTopic(topic, 1)
 
 			topic = fmt.Sprintf("commands/%v", child.UUID)
@@ -97,6 +105,7 @@ func (s *serialThings) delete(device model.Device) {
 			for _, id := range parent.GetChildrenIds() {
 				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", id))
 				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", id))
+				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/get/accepted", id))
 
 			}
 			parent.RemoveChildren()
@@ -104,6 +113,7 @@ func (s *serialThings) delete(device model.Device) {
 		}
 
 		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", device.UUID))
+		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/get/accepted", device.UUID))
 		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", device.UUID))
 
 		delete(s.things, device.Addr)
@@ -136,6 +146,22 @@ func (s *serialThings) heartCheck() {
 					s.pubChan <- &model.MqttMsg{
 						Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
 						Payload: payload,
+					}
+				}
+			}
+
+			if thing.IsConnected() {
+				s.pubChan <- &model.MqttMsg{
+					Topic:   fmt.Sprintf("%v/shadow/get", thing.GetId()),
+					Payload: "",
+				}
+
+				if parent, ok := thing.(model.Parent); ok {
+					for _, id := range parent.GetChildrenIds() {
+						s.pubChan <- &model.MqttMsg{
+							Topic:   fmt.Sprintf("%v/shadow/get", id),
+							Payload: payload,
+						}
 					}
 				}
 			}

@@ -185,7 +185,35 @@ func (i *Breaker_STB3_125_RJ) HeartCheck() {
 		i.Request("getQuantity", nil)
 	}
 }
+func (i *Breaker_STB3_125_RJ) GetAccepted(c mqtt.Client, m mqtt.Message) {
+	var desired struct {
+		On bool `json:"on"`
+	}
 
+	err := json.Unmarshal(m.Payload(), &desired)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal breaker stb3-125-RJ update delta: %v", err)
+		return
+	}
+
+	data := []byte{i.addr}
+	switch desired.On {
+	case true:
+		data = append(data, 0x05, 0x00, 0x01, 0xFF, 0x00)
+	case false:
+		data = append(data, 0x05, 0x00, 0x01, 0x00, 0x00)
+	}
+
+	crc, err := utils.CRC16(data)
+	if err != nil {
+		return
+	}
+	data = append(data, crc...)
+
+	i.SendFrame(data)
+
+}
 func (i *Breaker_STB3_125_RJ) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
 	var desired struct {

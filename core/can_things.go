@@ -15,7 +15,7 @@ import (
 )
 
 type canThings struct {
-	nodeId string
+	nodeID string
 
 	mu     sync.Mutex
 	things map[byte]model.Thing
@@ -27,6 +27,9 @@ type canThings struct {
 	view model.Observer
 }
 
+func (s *canThings) SetNodeUUID(uuid string) {
+	s.nodeID = uuid
+}
 func (s *canThings) UpdateDevice(device model.Device) {
 	switch device.Operation {
 	case "add":
@@ -41,7 +44,7 @@ func (s *canThings) UpdateDevice(device model.Device) {
 func NewCanThings(conn model.Connection, ch chan<- *model.MqttMsg, nodeId string) *canThings {
 	return &canThings{
 
-		nodeId:     nodeId,
+		nodeID:     nodeId,
 		connection: conn,
 
 		things:  make(map[byte]model.Thing),
@@ -63,6 +66,7 @@ func (s *canThings) delete(device model.Device) {
 			for _, id := range parent.GetChildrenIds() {
 				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", id))
 				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", id))
+				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/get/accepted", id))
 
 			}
 			parent.RemoveChildren()
@@ -71,6 +75,7 @@ func (s *canThings) delete(device model.Device) {
 
 		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", device.UUID))
 		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", device.UUID))
+		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/get/accepted", device.UUID))
 
 		delete(s.things, device.CanID)
 
@@ -104,6 +109,22 @@ func (s *canThings) heartCheck() {
 					s.pubChan <- &model.MqttMsg{
 						Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
 						Payload: payload,
+					}
+				}
+			}
+
+			if thing.IsConnected() {
+				s.pubChan <- &model.MqttMsg{
+					Topic:   fmt.Sprintf("%v/shadow/get", thing.GetId()),
+					Payload: "",
+				}
+
+				if parent, ok := thing.(model.Parent); ok {
+					for _, id := range parent.GetChildrenIds() {
+						s.pubChan <- &model.MqttMsg{
+							Topic:   fmt.Sprintf("%v/shadow/get", id),
+							Payload: payload,
+						}
 					}
 				}
 			}
@@ -168,6 +189,10 @@ func (s *canThings) add(device model.Device) error {
 			service.GetMqttService().AddTopicHandler(topic, deviceChild.UpdateDelta)
 			service.GetMqttService().AddSubscriptionTopic(topic, 1)
 
+			topic = fmt.Sprintf("%v/shadow/get/accepted", child.UUID)
+			service.GetMqttService().AddTopicHandler(topic, deviceChild.GetAccepted)
+			service.GetMqttService().AddSubscriptionTopic(topic, 1)
+
 			topic = fmt.Sprintf("commands/%v", child.UUID)
 			service.GetMqttService().AddTopicHandler(topic, deviceChild.CommandRequest)
 			service.GetMqttService().AddSubscriptionTopic(topic, 0)
@@ -200,12 +225,12 @@ func (s *canThings) converterRegister(data []byte) {
 	sn := strings.ToUpper(hex.EncodeToString(data[1:]))
 
 	var tmp struct {
-		Node          string `json:"node"`
+		NodeUUID      string `json:"node_uuid"`
 		SN            string `json:"sn"`
 		ConverterType int    `json:"converter_type"`
 	}
 
-	tmp.Node = s.nodeId
+	tmp.NodeUUID = s.nodeID
 	tmp.SN = sn
 	tmp.ConverterType = int(data[0])
 
@@ -214,7 +239,7 @@ func (s *canThings) converterRegister(data []byte) {
 		log.Printf("Failed to marshal converter register data: %v", err)
 		return
 	}
-	topic := fmt.Sprintf("node/%v/converters/register", s.nodeId)
+	topic := fmt.Sprintf("node/%v/converters/register", s.nodeID)
 
 	err = service.DefaultMqttService.PublishMessage(topic, 0, false, jsonData)
 	if err != nil {

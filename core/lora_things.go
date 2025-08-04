@@ -17,7 +17,7 @@ import (
 )
 
 type loraThings struct {
-	nodeId     string
+	nodeID     string
 	mu         sync.Mutex
 	things     map[string]model.Thing
 	connection model.Connection
@@ -27,6 +27,10 @@ type loraThings struct {
 	isParing    bool
 	paringMutex sync.Mutex
 	view        model.Observer
+}
+
+func (s *loraThings) SetNodeUUID(uuid string) {
+	s.nodeID = uuid
 }
 
 func (s *loraThings) UpdateDevice(device model.Device) {
@@ -39,12 +43,12 @@ func (s *loraThings) UpdateDevice(device model.Device) {
 	}
 }
 
-func NewLoraThings(conn model.Connection, ch chan<- *model.MqttMsg, nodeId string) *loraThings {
+func NewLoraThings(conn model.Connection, ch chan<- *model.MqttMsg, id string) *loraThings {
 	return &loraThings{
-		nodeId:     nodeId,
+		nodeID:     id,
 		things:     make(map[string]model.Thing),
 		connection: conn,
-		view:       view.NewShadowView(nodeId, ch),
+		view:       view.NewShadowView(id, ch),
 		pubChan:    ch,
 	}
 }
@@ -107,6 +111,10 @@ func (s *loraThings) add(device model.Device) error {
 			service.GetMqttService().AddTopicHandler(topic, deviceChild.UpdateDelta)
 			service.GetMqttService().AddSubscriptionTopic(topic, 1)
 
+			topic = fmt.Sprintf("%v/shadow/get/accepted", child.UUID)
+			service.GetMqttService().AddTopicHandler(topic, deviceChild.GetAccepted)
+			service.GetMqttService().AddSubscriptionTopic(topic, 1)
+
 			topic = fmt.Sprintf("commands/%v", child.UUID)
 			service.GetMqttService().AddTopicHandler(topic, deviceChild.CommandRequest)
 			service.GetMqttService().AddSubscriptionTopic(topic, 0)
@@ -140,12 +148,14 @@ func (s *loraThings) delete(device model.Device) {
 			for _, id := range parent.GetChildrenIds() {
 				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", id))
 				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", id))
+				service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/get/accepted", id))
 
 			}
 			parent.RemoveChildren()
 		}
 		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/update/delta", device.UUID))
 		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", device.UUID))
+		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/get/accepted", device.UUID))
 
 		delete(s.things, device.ConverterSN)
 
@@ -178,6 +188,22 @@ func (s *loraThings) heartCheck() {
 					s.pubChan <- &model.MqttMsg{
 						Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
 						Payload: payload,
+					}
+				}
+			}
+
+			if thing.IsConnected() {
+				s.pubChan <- &model.MqttMsg{
+					Topic:   fmt.Sprintf("%v/shadow/get", thing.GetId()),
+					Payload: "",
+				}
+
+				if parent, ok := thing.(model.Parent); ok {
+					for _, id := range parent.GetChildrenIds() {
+						s.pubChan <- &model.MqttMsg{
+							Topic:   fmt.Sprintf("%v/shadow/get", id),
+							Payload: payload,
+						}
 					}
 				}
 			}
@@ -229,12 +255,12 @@ func (s *loraThings) converterRegister(data []byte) {
 	t := 4 + data[2] - 0xF2
 
 	var tmp struct {
-		Node          string `json:"node"`
+		NodeUUID      string `json:"node_uuid"`
 		SN            string `json:"sn"`
 		ConverterType int    `json:"converter_type"`
 	}
 
-	tmp.Node = s.nodeId
+	tmp.NodeUUID = s.nodeID
 	tmp.SN = sn
 	tmp.ConverterType = int(t)
 
@@ -243,7 +269,7 @@ func (s *loraThings) converterRegister(data []byte) {
 		log.Printf("Failed to marshal converter register data: %v", err)
 		return
 	}
-	topic := fmt.Sprintf("node/%v/converters/register", s.nodeId)
+	topic := fmt.Sprintf("node/%v/converters/register", s.nodeID)
 
 	err = service.DefaultMqttService.PublishMessage(topic, 0, false, jsonData)
 	if err != nil {
@@ -296,14 +322,14 @@ func (s *loraThings) Process() {
 					if cmd == 0xF1 {
 
 						var data struct {
-							Node string `json:"node"`
-							SN   string `json:"sn"`
+							NodeUUID string `json:"node_uuid"`
+							SN       string `json:"sn"`
 						}
 
-						data.Node = s.nodeId
+						data.NodeUUID = s.nodeID
 						data.SN = sn
 
-						topic := fmt.Sprintf("node/%v/lora-panels/register", s.nodeId)
+						topic := fmt.Sprintf("node/%v/lora-panels/register", s.nodeID)
 
 						jsonData, err := json.Marshal(data)
 						if err != nil {

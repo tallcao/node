@@ -38,7 +38,9 @@ func NewLightModuleChild(guid string, no int, o Observer, parent Thing) *LightMo
 
 func (i *LightModuleChild) Set(new bool) {
 
-	changed := new != i.on
+	old := i.on
+	i.on = new
+	changed := new != old
 	if changed {
 		i.notifyAll()
 	}
@@ -56,7 +58,26 @@ func (i *LightModuleChild) notifyAll() {
 	i.observer.Update(i.guid, state)
 
 }
+func (i *LightModuleChild) GetAccepted(c mqtt.Client, m mqtt.Message) {
+	var desired struct {
+		On bool `json:"on"`
+	}
 
+	err := json.Unmarshal(m.Payload(), &desired)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal light update delta: %v", err)
+		return
+	}
+
+	switch desired.On {
+	case true:
+		i.parent.Request("on", i.no)
+	case false:
+		i.parent.Request("off", i.no)
+
+	}
+}
 func (i *LightModuleChild) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
 	var desired struct {

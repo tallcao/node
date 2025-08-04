@@ -51,6 +51,28 @@ func (i *Door) Request(command string, params interface{}) {
 	}
 
 }
+
+func (i *Door) GetAccepted(c mqtt.Client, m mqtt.Message) {
+
+	var update struct {
+		On bool `json:"on"`
+	}
+
+	err := json.Unmarshal(m.Payload(), &update)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal door update delta: %v", err)
+		return
+	}
+
+	switch update.On {
+	case true:
+		i.SendFrame([]byte{0x01})
+	case false:
+		i.SendFrame([]byte{0x00})
+	}
+}
+
 func (i *Door) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
 	var update struct {

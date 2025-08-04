@@ -157,6 +157,10 @@ func (n *Node) getUUIDCallback(c mqtt.Client, m mqtt.Message) {
 
 	n.uuid = string(m.Payload())
 
+	n.canThings.SetNodeUUID(n.uuid)
+	n.loraThings.SetNodeUUID(n.uuid)
+	n.serialThings.SetNodeUUID(n.uuid)
+
 	n.publishDevices()
 
 	topic := fmt.Sprintf("node/%v/lora/permit-join", n.uuid)

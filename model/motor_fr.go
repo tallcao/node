@@ -126,6 +126,28 @@ func (i *MotorFR) notifyAll() {
 func (i *MotorFR) GetDevice485Setting() (uint32, byte, byte, byte) {
 	return 9600, 0, 8, 1
 }
+func (i *MotorFR) GetAccepted(c mqtt.Client, m mqtt.Message) {
+	var desired struct {
+		Status uint8 `json:"status"`
+	}
+
+	err := json.Unmarshal(m.Payload(), &desired)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal e-valve update delta: %v", err)
+		return
+	}
+
+	data := []byte{i.addr, 0x06, 0x00, 0x00, 0x00, byte(desired.Status)}
+
+	crc, err := utils.CRC16(data)
+	if err != nil {
+		log.Printf("ERROR: Failed to calculate CRC16 for motor curtain %s: %v", i.guid, err)
+		return
+	}
+	data = append(data, crc...)
+	i.SendFrame(data)
+}
 
 func (i *MotorFR) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 

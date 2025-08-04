@@ -123,6 +123,34 @@ func (i *MotorCurtain) HeartCheck() {
 	}
 }
 
+func (i *MotorCurtain) GetAccepted(c mqtt.Client, m mqtt.Message) {
+
+	var desired struct {
+		Percent uint8 `json:"percent"`
+	}
+
+	err := json.Unmarshal(m.Payload(), &desired)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to unmarshal motor curtain update delta: %v", err)
+		return
+	}
+
+	if desired.Percent > 100 {
+		log.Printf("ERROR: Invalid percent value %d for motor curtain %s", desired.Percent, i.guid)
+		return
+	}
+
+	data := []byte{i.addr, 0xFE, 0xFE, 0x03, 0x04, byte(desired.Percent)}
+	crc, err := utils.CRC16(data)
+	if err != nil {
+		log.Printf("ERROR: Failed to calculate CRC16 for motor curtain %s: %v", i.guid, err)
+		return
+	}
+	data = append(data, crc...)
+	i.SendFrame(data)
+}
+
 func (i *MotorCurtain) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 
 	var desired struct {

@@ -83,6 +83,10 @@ func newThing(guid string, vendor, m string, c model.Converter, v model.Observer
 		service.GetMqttService().AddTopicHandler(topic, shadow.UpdateDelta)
 		service.GetMqttService().AddSubscriptionTopic(topic, 1)
 
+		topic = fmt.Sprintf("%v/shadow/get/accepted", guid)
+		service.GetMqttService().AddTopicHandler(topic, shadow.GetAccepted)
+		service.GetMqttService().AddSubscriptionTopic(topic, 1)
+
 	}
 
 	if cmd, ok := thing.(model.Command); ok {

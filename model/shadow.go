@@ -4,4 +4,5 @@ import mqtt "github.com/eclipse/paho.mqtt.golang"
 
 type Shadow interface {
 	UpdateDelta(mqtt.Client, mqtt.Message)
+	GetAccepted(mqtt.Client, mqtt.Message)
 }
