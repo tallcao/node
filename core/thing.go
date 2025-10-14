@@ -72,6 +72,10 @@ func newThing(guid string, vendor, m string, c model.Converter, v model.Observer
 		thing = model.NewLoraPanel(guid, c, v)
 	case model.DeviceModelR1016:
 		thing = model.NewR1016(guid, c, v)
+	case model.DeviceModelSerialPanel:
+		thing = model.NewSerialPanel(guid, c, v)
+	case model.DeviceModelElectricMeter:
+		thing = model.NewElectricMeter(guid, c, v)
 	default:
 		return nil, fmt.Errorf("new thing error")
 

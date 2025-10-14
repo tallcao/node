@@ -72,9 +72,9 @@ func (i *LightModuleChild) GetAccepted(c mqtt.Client, m mqtt.Message) {
 
 	switch desired.On {
 	case true:
-		i.parent.Request("on", i.no)
+		i.parent.Request("on", fmt.Sprint(i.no))
 	case false:
-		i.parent.Request("off", i.no)
+		i.parent.Request("off", fmt.Sprint(i.no))
 
 	}
 }
@@ -94,9 +94,9 @@ func (i *LightModuleChild) UpdateDelta(c mqtt.Client, m mqtt.Message) {
 	if desired.On != i.on {
 		switch desired.On {
 		case true:
-			i.parent.Request("on", i.no)
+			i.parent.Request("on", fmt.Sprint(i.no))
 		case false:
-			i.parent.Request("off", i.no)
+			i.parent.Request("off", fmt.Sprint(i.no))
 
 		}
 	}

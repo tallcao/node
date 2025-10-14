@@ -102,10 +102,10 @@ func (n *Node) devicesUpdateCallback(c mqtt.Client, m mqtt.Message) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if update.Version <= n.version {
-		log.Printf("Ignoring outdated devices update: %d <= %d", update.Version, n.version)
-		return
-	}
+	// if update.Version <= n.version {
+	// 	log.Printf("Ignoring outdated devices update: %d <= %d", update.Version, n.version)
+	// 	return
+	// }
 	n.version = update.Version
 
 	for _, device := range update.Devices {
@@ -125,7 +125,7 @@ func (n *Node) devicesUpdateCallback(c mqtt.Client, m mqtt.Message) {
 		case model.ConnectionTypeSerial:
 			n.serialThings.UpdateDevice(device)
 		default:
-			log.Printf("Unknown device converter type: %v", device.ConverterType)
+			log.Printf("Unknown device connection type: %v", connectionType)
 		}
 	}
 }
@@ -161,8 +161,6 @@ func (n *Node) getUUIDCallback(c mqtt.Client, m mqtt.Message) {
 	n.loraThings.SetNodeUUID(n.uuid)
 	n.serialThings.SetNodeUUID(n.uuid)
 
-	n.publishDevices()
-
 	topic := fmt.Sprintf("node/%v/lora/permit-join", n.uuid)
 	n.mqtt.AddTopicHandler(topic, n.loraThings.PermitJoinCallback)
 	n.mqtt.AddSubscriptionTopic(topic, 1)
@@ -174,6 +172,8 @@ func (n *Node) getUUIDCallback(c mqtt.Client, m mqtt.Message) {
 	topic = fmt.Sprintf("node/%v/converters/register/result", n.uuid)
 	n.mqtt.AddTopicHandler(topic, n.converterRegisterCallback)
 	n.mqtt.AddSubscriptionTopic(topic, 1)
+
+	n.publishDevices()
 }
 
 func (n *Node) onConnectHandler(c mqtt.Client) {

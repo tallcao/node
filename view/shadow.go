@@ -8,15 +8,12 @@ import (
 )
 
 type ShadowView struct {
-	node string
-
 	dataCh chan<- *model.MqttMsg
 }
 
-func NewShadowView(node string, ch chan<- *model.MqttMsg) *ShadowView {
+func NewShadowView(ch chan<- *model.MqttMsg) *ShadowView {
 
 	return &ShadowView{
-		node:   node,
 		dataCh: ch,
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"edge/model"
 	"edge/service"
 	"edge/view"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"sync"
@@ -21,6 +22,8 @@ type serialThings struct {
 	pubChan chan<- *model.MqttMsg
 
 	view model.Observer
+
+	serialPanelView model.Observer
 }
 
 func (s *serialThings) SetNodeUUID(uuid string) {
@@ -47,17 +50,33 @@ func NewSerialThings(conn model.Connection, ch chan<- *model.MqttMsg, nodeId str
 
 		pubChan: ch,
 
-		view: view.NewShadowView(nodeId, ch),
+		view:            view.NewShadowView(ch),
+		serialPanelView: view.NewEventView("serial-panel", ch),
 	}
 
 }
 func (s *serialThings) add(device model.Device) error {
+
+	index := device.Addr
+
+	if thing, found := s.things[index]; found {
+		if thing, ok := thing.(model.PassiveReportingDevice); ok {
+			thing.StopLoopRequest()
+		}
+	}
+
 	c := &model.SerialConverter{
-		Addr: uint8(device.Addr),
+		Addr: index,
 		Tx:   s.connection.Tx,
 	}
 
-	thing, err := newThing(device.UUID, device.Vendor, device.Model, c, s.view)
+	observer := s.view
+
+	if device.Vendor == "ztnet" && device.Model == "serial_panel" {
+		observer = s.serialPanelView
+	}
+
+	thing, err := newThing(device.UUID, device.Vendor, device.Model, c, observer)
 	if err != nil {
 		return err
 	}
@@ -86,7 +105,7 @@ func (s *serialThings) add(device model.Device) error {
 	}
 
 	s.mu.Lock()
-	s.things[uint8(device.Addr)] = thing
+	s.things[index] = thing
 	s.mu.Unlock()
 
 	if thing, ok := thing.(model.PassiveReportingDevice); ok {
@@ -116,6 +135,10 @@ func (s *serialThings) delete(device model.Device) {
 		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/get/accepted", device.UUID))
 		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", device.UUID))
 
+		if thing, ok := thing.(model.PassiveReportingDevice); ok {
+			thing.StopLoopRequest()
+		}
+
 		delete(s.things, device.Addr)
 
 	}
@@ -132,20 +155,32 @@ func (s *serialThings) heartCheck() {
 
 		if thing.ConnectedChanged() {
 
-			payload := map[string]bool{
-				"connected": thing.IsConnected(),
+			var data struct {
+				DeviceUUID string         `json:"device_uuid"`
+				State      map[string]any `json:"state"`
 			}
 
-			s.pubChan <- &model.MqttMsg{
-				Topic:   fmt.Sprintf("%v/shadow/update/reported", thing.GetId()),
-				Payload: payload,
+			data.DeviceUUID = thing.GetId()
+			data.State = make(map[string]any)
+			data.State["connected"] = thing.IsConnected()
+
+			if payload, err := json.Marshal(data); err == nil {
+				s.pubChan <- &model.MqttMsg{
+					Topic:   fmt.Sprintf("%v/shadow/update/reported", thing.GetId()),
+					Payload: payload,
+				}
 			}
+
 			// children connected
 			if parent, ok := thing.(model.Parent); ok {
 				for _, id := range parent.GetChildrenIds() {
-					s.pubChan <- &model.MqttMsg{
-						Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
-						Payload: payload,
+
+					data.DeviceUUID = id
+					if payload, err := json.Marshal(data); err == nil {
+						s.pubChan <- &model.MqttMsg{
+							Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
+							Payload: payload,
+						}
 					}
 				}
 			}
@@ -160,7 +195,7 @@ func (s *serialThings) heartCheck() {
 					for _, id := range parent.GetChildrenIds() {
 						s.pubChan <- &model.MqttMsg{
 							Topic:   fmt.Sprintf("%v/shadow/get", id),
-							Payload: payload,
+							Payload: "",
 						}
 					}
 				}
@@ -176,7 +211,7 @@ func (s *serialThings) heartBeatRequest() {
 	s.mu.Unlock()
 
 	for _, thing := range things {
-		thing.HeartRequest()
+		thing.Request("heartBeat", nil)
 		time.Sleep(2 * time.Second) // 避免过快请求
 	}
 

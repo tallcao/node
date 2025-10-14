@@ -8,7 +8,7 @@ import (
 const (
 	Major = 2
 	Minor = 0
-	Patch = 1
+	Patch = 2
 )
 
 func IPv4() string {

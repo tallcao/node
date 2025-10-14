@@ -19,4 +19,6 @@ const (
 	DeviceModelMotorFr       = "motor_fr"
 	DeviceModelLoraPanel     = "lora_panel"
 	DeviceModelR1016         = "r1016"
+	DeviceModelSerialPanel   = "serial_panel"
+	DeviceModelElectricMeter = "electric_meter"
 )

@@ -50,7 +50,7 @@ func NewCanThings(conn model.Connection, ch chan<- *model.MqttMsg, nodeId string
 		things:  make(map[byte]model.Thing),
 		pubChan: ch,
 
-		view: view.NewShadowView(nodeId, ch),
+		view: view.NewShadowView(ch),
 	}
 
 }
@@ -77,6 +77,10 @@ func (s *canThings) delete(device model.Device) {
 		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("commands/%v", device.UUID))
 		service.GetMqttService().DeleteSubscriptionTopic(fmt.Sprintf("%v/shadow/get/accepted", device.UUID))
 
+		if thing, ok := thing.(model.PassiveReportingDevice); ok {
+			thing.StopLoopRequest()
+		}
+
 		delete(s.things, device.CanID)
 
 	}
@@ -94,21 +98,33 @@ func (s *canThings) heartCheck() {
 
 		if thing.ConnectedChanged() {
 
-			payload := map[string]bool{
-				"connected": thing.IsConnected(),
+			var data struct {
+				DeviceUUID string         `json:"device_uuid"`
+				State      map[string]any `json:"state"`
 			}
 
-			s.pubChan <- &model.MqttMsg{
-				Topic:   fmt.Sprintf("%v/shadow/update/reported", thing.GetId()),
-				Payload: payload,
+			data.DeviceUUID = thing.GetId()
+			data.State = make(map[string]any)
+			data.State["connected"] = thing.IsConnected()
+
+			if payload, err := json.Marshal(data); err == nil {
+				s.pubChan <- &model.MqttMsg{
+					Topic:   fmt.Sprintf("%v/shadow/update/reported", thing.GetId()),
+					Payload: payload,
+				}
 			}
 
 			// children connected
 			if parent, ok := thing.(model.Parent); ok {
 				for _, id := range parent.GetChildrenIds() {
-					s.pubChan <- &model.MqttMsg{
-						Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
-						Payload: payload,
+
+					data.DeviceUUID = id
+					if payload, err := json.Marshal(data); err == nil {
+
+						s.pubChan <- &model.MqttMsg{
+							Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
+							Payload: payload,
+						}
 					}
 				}
 			}
@@ -123,7 +139,7 @@ func (s *canThings) heartCheck() {
 					for _, id := range parent.GetChildrenIds() {
 						s.pubChan <- &model.MqttMsg{
 							Topic:   fmt.Sprintf("%v/shadow/get", id),
-							Payload: payload,
+							Payload: "",
 						}
 					}
 				}
@@ -166,11 +182,19 @@ func getCode(t int) int {
 
 func (s *canThings) add(device model.Device) error {
 
+	index := byte(device.CanID)
+
+	if thing, found := s.things[index]; found {
+		if thing, ok := thing.(model.PassiveReportingDevice); ok {
+			thing.StopLoopRequest()
+		}
+	}
+
 	code := getCode(device.ConverterType)
 
 	converter := &model.CanConverter{
 		SN:   device.ConverterSN,
-		No:   uint8(device.CanID),
+		No:   index,
 		Code: code,
 		Tx:   s.connection.Tx,
 	}
@@ -203,7 +227,7 @@ func (s *canThings) add(device model.Device) error {
 	}
 
 	s.mu.Lock()
-	s.things[byte(device.CanID)] = thing
+	s.things[index] = thing
 	s.mu.Unlock()
 
 	switch thing := thing.(type) {

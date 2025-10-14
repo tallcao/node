@@ -213,6 +213,8 @@ func (s *MqttService) Start() error {
 }
 
 func (s *MqttService) Stop() {
+	s.client.Publish(fmt.Sprintf("node/%v/connected", s.id), 1, true, "false")
+
 	log.Println("Stopping MQTT Client Service...")
 	s.mu.Lock()
 	s.running = false
@@ -232,7 +234,7 @@ func (s *MqttService) PublishMessage(topic string, qos byte, retained bool, payl
 	if token.Error() != nil {
 		return fmt.Errorf("failed to publish message to topic '%s': %w", topic, token.Error())
 	}
-	log.Printf("Published message to topic: %s\n", topic)
+	// log.Printf("Published message to topic: %s\n", topic)
 	return nil
 }
 

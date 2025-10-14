@@ -10,7 +10,7 @@ import (
 )
 
 type R1016 struct {
-	status uint16
+	status int
 
 	addr byte
 
@@ -118,12 +118,12 @@ func (d *R1016) Response(data []byte) {
 
 	old := d.status
 
-	statusValue := uint16(0)
+	statusValue := 0
 
 	for i := 0; i < 16; i++ {
 
 		v := data[i+5]
-		statusValue += uint16(v << i)
+		statusValue += int(v) << i
 
 		d.children[i].Set(v == 0x01)
 

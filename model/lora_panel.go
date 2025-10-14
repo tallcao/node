@@ -26,7 +26,7 @@ func NewLoraPanel(guid string, c Converter, o Observer) *LoraPanel {
 	return item
 }
 
-func (i *LoraPanel) Request(command string, params interface{}) {
+func (i *LoraPanel) Request(command string, params any) {
 
 }
 
@@ -40,11 +40,11 @@ func (i *LoraPanel) Response(data []byte) {
 
 	switch data[0] {
 	case 1:
-		v = "1"
+		v = "press_1"
 	case 2:
-		v = "2"
+		v = "press_2"
 	case 4:
-		v = "3"
+		v = "press_3"
 	}
 
 	i.action = v
@@ -63,7 +63,7 @@ func (i *LoraPanel) GetType() DEVICE_TYPE {
 
 func (i *LoraPanel) notifyAll() {
 
-	state := map[string]interface{}{
+	state := map[string]any{
 		"action": i.action,
 	}
 

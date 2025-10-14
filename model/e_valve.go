@@ -61,21 +61,21 @@ func (i *EValve) Response(data []byte) {
 
 	if len(data) == 8 {
 		if data[0] == 0x00 {
-			i.on = true
+			i.on = false
 		}
 
 		if data[0] == 0x01 {
-			i.on = false
+			i.on = true
 		}
 	}
 
 	if len(data) == 2 {
 		if data[1] == 0x00 {
-			i.on = true
+			i.on = false
 		}
 
 		if data[1] == 0x01 {
-			i.on = false
+			i.on = true
 		}
 	}
 
