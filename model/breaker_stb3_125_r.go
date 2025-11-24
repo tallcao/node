@@ -29,6 +29,8 @@ func NewBreaker_STB3_125_R(guid string, c Converter, o Observer) *Breaker_STB3_1
 
 	item := &Breaker_STB3_125_R{
 
+		guid: guid,
+
 		Converter: c,
 
 		IHeart:   new(Heart),
@@ -148,6 +150,7 @@ func (i *Breaker_STB3_125_R) notifyAll() {
 }
 
 func (i *Breaker_STB3_125_R) HeartCheck() {
+	i.IHeart.HeartCheck()
 	if i.IHeart.IsConnected() && i.IHeart.ConnectedChanged() {
 		i.Request("getStatus", nil)
 		time.Sleep(3 * time.Second)

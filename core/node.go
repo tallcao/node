@@ -16,10 +16,9 @@ import (
 )
 
 type nodeConfig struct {
-	ID     string `json:"id"`
-	Cafile string `json:"cafile"`
+	ID string `json:"id"`
+	// Cafile string `json:"cafile"`
 	Broker string `json:"broker"`
-	Dbfile string `json:"dbfile"`
 }
 
 type syncDevices struct {
@@ -66,7 +65,8 @@ func NewNode(file string, dbus *service.DbusService) *Node {
 	}
 
 	id := config.ID
-	ca := config.Cafile
+	// ca := config.Cafile
+	ca :=""
 	uri := config.Broker
 
 	ch := make(chan *model.MqttMsg, 100)

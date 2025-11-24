@@ -81,7 +81,10 @@ func NewMqttService(id, brokerURL, caFile string) *MqttService {
 	opts.SetKeepAlive(60 * time.Second)
 	opts.SetConnectRetry(true) // 启用自动重连
 
-	opts.SetTLSConfig(tlsConfig(caFile))
+	// opts.SetTLSConfig(tlsConfig(caFile))
+
+	opts.SetUsername("smart")
+	opts.SetPassword("smart123")
 
 	service := &MqttService{
 		id:                id,

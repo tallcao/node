@@ -15,7 +15,7 @@ import (
 type ElectricMeter struct {
 	on bool
 
-	energy float32
+	energy float64
 
 	guid string
 
@@ -24,8 +24,6 @@ type ElectricMeter struct {
 
 	Converter
 
-	PassiveReporting *PassiveReporting
-
 	IHeart
 }
 
@@ -33,10 +31,10 @@ func NewElectricMeter(guid string, c Converter, o Observer) *ElectricMeter {
 
 	item := &ElectricMeter{
 
+		guid: guid,
+
 		Converter: c,
-		PassiveReporting: &PassiveReporting{
-			Interval: 60 * 60,
-		},
+
 		IHeart:   new(Heart),
 		observer: o,
 	}
@@ -65,8 +63,10 @@ func (i *ElectricMeter) Request(command string, params interface{}) {
 		data = append(data, 0x10, 0x00, 0x10, 0x00, 0x01, 0x02, 0x55, 0x55)
 	case "off":
 		data = append(data, 0x10, 0x00, 0x10, 0x00, 0x01, 0x02, 0xAA, 0xAA)
+
 	case "toggle":
 		v := []byte{0x55, 0x55}
+
 		if i.on {
 			v = []byte{0xAA, 0xAA}
 		}
@@ -92,7 +92,8 @@ func (d *ElectricMeter) Response(data []byte) {
 		return
 	}
 
-	if len(data) == 7 && data[4] == 0x04 {
+	on := d.on
+	if len(data) == 7 && data[1] == 0x04 {
 
 		if data[4] == 0x55 {
 			d.on = true
@@ -101,15 +102,27 @@ func (d *ElectricMeter) Response(data []byte) {
 			d.on = false
 		}
 
-		d.notifyOn()
+		if d.on != on {
+			d.notifyOn()
+		}
+
 	}
 
 	if len(data) == 9 && data[1] == 0x03 {
 
-		d.energy = 0.01 * float32(binary.BigEndian.Uint32(data[3:7]))
+		intValue := int64(binary.BigEndian.Uint32(data[3:7]))
+
+		d.energy = float64(intValue) / 100
 
 		d.notifyEnergy()
 
+	}
+
+	// 拉合闸返回
+	if len(data) == 8 && data[1] == 0x10 {
+
+		time.Sleep(500 * time.Millisecond)
+		d.Request("getStatus", nil)
 	}
 
 }
@@ -142,10 +155,9 @@ func (i *ElectricMeter) notifyEnergy() {
 }
 
 func (i *ElectricMeter) HeartCheck() {
+	i.IHeart.HeartCheck()
 	if i.IHeart.IsConnected() && i.IHeart.ConnectedChanged() {
 		i.Request("getStatus", nil)
-		time.Sleep(3 * time.Second)
-		i.Request("getEnergy", nil)
 	}
 }
 func (i *ElectricMeter) GetAccepted(c mqtt.Client, m mqtt.Message) {
@@ -222,14 +234,6 @@ func (i *ElectricMeter) CommandRequest(c mqtt.Client, m mqtt.Message) {
 	}
 
 	i.Request(cmd.Command, cmd.Data)
-}
-
-func (i *ElectricMeter) StartLoopRequest() {
-	i.PassiveReporting.StartLoopRequest(i.Request, "getEnergy")
-}
-
-func (i *ElectricMeter) StopLoopRequest() {
-	i.PassiveReporting.StopLoopRequest()
 }
 
 func (i *ElectricMeter) GetDevice485Setting() (uint32, byte, byte, byte) {

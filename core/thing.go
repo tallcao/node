@@ -76,6 +76,9 @@ func newThing(guid string, vendor, m string, c model.Converter, v model.Observer
 		thing = model.NewSerialPanel(guid, c, v)
 	case model.DeviceModelElectricMeter:
 		thing = model.NewElectricMeter(guid, c, v)
+	case model.DeviceModelElectricMeterN:
+		thing = model.NewElectricMeterN(guid, c, v)
+
 	default:
 		return nil, fmt.Errorf("new thing error")
 
