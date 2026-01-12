@@ -50,7 +50,7 @@ type Node struct {
 	syncDevices
 }
 
-func NewNode(file string, dbus *service.DbusService) *Node {
+func NewNode(file string, uds *service.UdsServer) *Node {
 
 	content, err := os.ReadFile(file)
 
@@ -66,7 +66,7 @@ func NewNode(file string, dbus *service.DbusService) *Node {
 
 	id := config.ID
 	// ca := config.Cafile
-	ca :=""
+	ca := ""
 	uri := config.Broker
 
 	ch := make(chan *model.MqttMsg, 100)
@@ -76,9 +76,9 @@ func NewNode(file string, dbus *service.DbusService) *Node {
 
 		id: id,
 
-		canThings:    NewCanThings(dbus.CanConnection(), ch, id),
-		loraThings:   NewLoraThings(dbus.LoraConnection(), ch, id),
-		serialThings: NewSerialThings(dbus.SerialConnection(), ch, id),
+		canThings:    NewCanThings(uds.CanConnection(), ch, id),
+		loraThings:   NewLoraThings(uds.LoraConnection(), ch, id),
+		serialThings: NewSerialThings(uds.SerialConnection(), ch, id),
 
 		mqttPubChan: ch,
 		mqtt:        service.GetMqttService(),

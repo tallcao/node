@@ -136,8 +136,7 @@ func (d *Breaker_STB3_125_RJ) Response(data []byte) {
 	}
 
 	if len(data) == 9 && data[1] == 0x04 {
-		d.quantity = float32(data[3])*256 + float32(data[4]) + (float32(data[5])*256+float32(data[6]))*0.001
-
+		d.quantity = float32(data[3])*256 + float32(data[4]) + float32((int64(data[5])*256+int64(data[6]))/1000)
 	}
 
 	onChanged := (on != d.on)

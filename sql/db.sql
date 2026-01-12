@@ -19,11 +19,6 @@ CREATE TABLE serial(
 
 );
 
--- CREATE TABLE panel(
---     id integer primary key,
---     sn text unique not null
--- );
-
 
 
 

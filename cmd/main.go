@@ -11,17 +11,15 @@ var (
 )
 
 func init() {
-	// flag.StringVar(&config, "c", "zigbee.json", "config file")
 	flag.StringVar(&config, "c", "node.json", "config file")
 }
 
 func main() {
 
-	dbusService := service.NewDbusService()
+	udsServer := service.NewUdsServer()
+	go udsServer.Run()
 
-	go dbusService.Run()
-
-	node := core.NewNode(config, dbusService)
+	node := core.NewNode(config, udsServer)
 
 	node.Run()
 }

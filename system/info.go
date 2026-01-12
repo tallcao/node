@@ -7,7 +7,7 @@ import (
 
 const (
 	Major = 2
-	Minor = 0
+	Minor = 1
 	Patch = 3
 )
 

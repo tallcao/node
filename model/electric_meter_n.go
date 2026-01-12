@@ -35,7 +35,7 @@ func NewElectricMeterN(guid string, c Converter, o Observer) *ElectricMeterN {
 	if adapter, ok := c.(AddrAdapter); ok {
 		item.addr = adapter.GetAddr()
 	} else {
-		item.addr = 0x00
+		item.addr = 0x01
 	}
 
 	return item
@@ -47,9 +47,9 @@ func (i *ElectricMeterN) Request(command string, params interface{}) {
 
 	switch command {
 	case "heartBeat":
-		data = append(data, 0x03, 0x00, 0x1D, 0x00, 0x02)
+		data = append(data, 0x03, 0x00, 0x63, 0x00, 0x02)
 	case "getEnergy":
-		data = append(data, 0x03, 0x00, 0x1D, 0x00, 0x02)
+		data = append(data, 0x03, 0x00, 0x63, 0x00, 0x02)
 
 	default:
 		return
