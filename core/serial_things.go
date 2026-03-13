@@ -153,50 +153,47 @@ func (s *serialThings) heartCheck() {
 	for _, thing := range s.things {
 		thing.HeartCheck()
 
-		if thing.ConnectedChanged() {
+		var data struct {
+			DeviceUUID string         `json:"device_uuid"`
+			State      map[string]any `json:"state"`
+		}
 
-			var data struct {
-				DeviceUUID string         `json:"device_uuid"`
-				State      map[string]any `json:"state"`
+		data.DeviceUUID = thing.GetId()
+		data.State = make(map[string]any)
+		data.State["connected"] = thing.IsConnected()
+
+		if payload, err := json.Marshal(data); err == nil {
+			s.pubChan <- &model.MqttMsg{
+				Topic:   fmt.Sprintf("%v/shadow/update/reported", thing.GetId()),
+				Payload: payload,
 			}
+		}
 
-			data.DeviceUUID = thing.GetId()
-			data.State = make(map[string]any)
-			data.State["connected"] = thing.IsConnected()
+		// children connected
+		if parent, ok := thing.(model.Parent); ok {
+			for _, id := range parent.GetChildrenIds() {
 
-			if payload, err := json.Marshal(data); err == nil {
-				s.pubChan <- &model.MqttMsg{
-					Topic:   fmt.Sprintf("%v/shadow/update/reported", thing.GetId()),
-					Payload: payload,
-				}
-			}
-
-			// children connected
-			if parent, ok := thing.(model.Parent); ok {
-				for _, id := range parent.GetChildrenIds() {
-
-					data.DeviceUUID = id
-					if payload, err := json.Marshal(data); err == nil {
-						s.pubChan <- &model.MqttMsg{
-							Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
-							Payload: payload,
-						}
+				data.DeviceUUID = id
+				if payload, err := json.Marshal(data); err == nil {
+					s.pubChan <- &model.MqttMsg{
+						Topic:   fmt.Sprintf("%v/shadow/update/reported", id),
+						Payload: payload,
 					}
 				}
 			}
+		}
 
-			if thing.IsConnected() {
-				s.pubChan <- &model.MqttMsg{
-					Topic:   fmt.Sprintf("%v/shadow/get", thing.GetId()),
-					Payload: "",
-				}
+		if thing.IsConnected() {
+			s.pubChan <- &model.MqttMsg{
+				Topic:   fmt.Sprintf("%v/shadow/get", thing.GetId()),
+				Payload: "",
+			}
 
-				if parent, ok := thing.(model.Parent); ok {
-					for _, id := range parent.GetChildrenIds() {
-						s.pubChan <- &model.MqttMsg{
-							Topic:   fmt.Sprintf("%v/shadow/get", id),
-							Payload: "",
-						}
+			if parent, ok := thing.(model.Parent); ok {
+				for _, id := range parent.GetChildrenIds() {
+					s.pubChan <- &model.MqttMsg{
+						Topic:   fmt.Sprintf("%v/shadow/get", id),
+						Payload: "",
 					}
 				}
 			}
